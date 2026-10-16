@@ -1,7 +1,11 @@
 import json, os, sys, time, glob, datetime
 mode, mins, extra = sys.argv[1], float(sys.argv[2]), sys.argv[3:]
 now = time.time()
-H = os.path.expanduser('~')
+# Paths use / on every system, so the mod can split them the same way on Windows.
+H = os.path.expanduser('~').replace(os.sep, '/')
+
+def files(pattern, **kw):
+    return [p.replace(os.sep, '/') for p in glob.glob(pattern, **kw)]
 
 def recent(paths):
     out = {}
@@ -135,7 +139,7 @@ def claude(p, mt):
 launches = []
 out = {'codex': [], 'claude': []}
 days = {(datetime.date.today() - datetime.timedelta(days=i)).strftime('%Y/%m/%d') for i in (0, 1)}
-cx = [p for d in days for p in glob.glob(H + '/.codex/sessions/' + d + '/rollout-*.jsonl')] + extra
+cx = [p for d in days for p in files(H + '/.codex/sessions/' + d + '/rollout-*.jsonl')] + extra
 for p, mt in recent(set(cx)).items():
     out['codex'].append(codex(p, mt))
 names = {}
@@ -151,13 +155,13 @@ for r in out['codex']:
         r['title'] = names[r['id']]
 if mode == 'all':
     # Claude Desktop keeps one record per session: its own id (what claude:// links take) and the CLI transcript id.
-    A = H + '/Library/Application Support/Claude/'
+    A = {'darwin': H + '/Library/Application Support', 'win32': os.environ.get('APPDATA', '').replace(os.sep, '/')}.get(sys.platform, H + '/.config') + '/Claude/'
     desk = {}
-    for p in glob.glob(A + 'claude-code-sessions/*/*/local_*.json') + glob.glob(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True):
+    for p in files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True):
         d = load(open(p, errors='replace').read())
         if d.get('cliSessionId') and not d.get('isArchived'):
             desk[d['cliSessionId']] = {'id': d.get('sessionId'), 'kind': 'code' if 'claude-code-sessions' in p else 'work'}
-    cl = glob.glob(H + '/.claude/projects/*/*.jsonl') + glob.glob(H + '/.claude/projects/*/*/subagents/agent-*.jsonl')
+    cl = files(H + '/.claude/projects/*/*.jsonl') + files(H + '/.claude/projects/*/*/subagents/agent-*.jsonl')
     for p, mt in recent(cl).items():
         r = claude(p, mt)
         r['desktop'] = desk.get(os.path.basename(p.split('/subagents/')[0])[:36].replace('.jsonl', ''))

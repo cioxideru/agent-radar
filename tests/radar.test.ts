@@ -14,6 +14,7 @@ test('parses a codex exec command line', () => {
 test('maps worktrees to their project', () => {
   expect(projectOf('/a/orbit-shop/.claude/worktrees/x/y')).toBe('orbit-shop')
   expect(projectOf('/a/orbit-shop')).toBe('orbit-shop')
+  expect(projectOf('C:\\dev\\orbit-shop\\.codex\\worktrees\\x')).toBe('orbit-shop')
 })
 
 test('builds a tree from a disk scan: subagent under its session, codex done', () => {

@@ -42,6 +42,12 @@ let t: Strings = STRINGS.en
 // App icons read from the installed apps at session start; until then (or without the apps) launchers are colored text.
 const ICONS: Record<string, string> = {}
 let home = ''
+// The system this runs on, read at session start; macOS has the app icons, Claude Desktop links and Terminal.
+let os: 'mac' | 'linux' | 'win' = 'mac'
+// The system's handler for a URL, folder or file; a file's folder where "show in Finder" has no equivalent.
+const opener = (target: string) =>
+  os === 'mac' ? ['open', target] : os === 'win' ? ['rundll32', 'url.dll,FileProtocolHandler', target] : ['xdg-open', target]
+const reveal = (file: string) => (os === 'mac' ? ['open', '-R', file] : opener(file.replace(/[\\/][^\\/]*$/, '')))
 let sessionId = ''
 // The current session's context window, used for Claude rows whose journal does not record one.
 // ponytail: one window for every Claude model; a per-model table if they diverge.
@@ -65,7 +71,7 @@ export const handoffUrl = (cwd: string, title: string, journal: string) =>
 export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 export const asq = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
-export const projectOf = (cwd = '') => cwd.replace(/\/\.(claude|codex)\/worktrees\/.*$/, '').split('/').pop() || cwd
+export const projectOf = (cwd = '') => cwd.replace(/[\\/]\.(claude|codex)[\\/]worktrees[\\/].*$/, '').split(/[\\/]/).pop() || cwd
 // Without the tenth of a million, for the narrowed token column.
 export const fmtKShort = (n: number) => (n >= 1e6 ? Math.round(n / 1e6) + 'M' : fmtK(n))
 export const fmtK = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n))
@@ -98,11 +104,11 @@ const blank = (id: string, now: number): Agent => ({
 })
 
 async function scan($: $, mode: 'codex' | 'all', mins: number, extra: string[]): Promise<Scan> {
-  const r = await $.process.run(['python3', '-I', '-c', SCAN_PY, mode, String(mins), ...extra], { timeoutMs: 20000 })
+  const r = await $.process.run([os === 'win' ? 'python' : 'python3', '-I', '-c', SCAN_PY, mode, String(mins), ...extra], { timeoutMs: 20000 })
   return r.exitCode === 0 ? (JSON.parse(r.stdout) as Scan) : { codex: [], claude: [] }
 }
 
-const inRoot = (cwd = '') => cwd === root || cwd.startsWith(root + '/')
+const inRoot = (cwd = '') => cwd === root || cwd.startsWith(root + '/') || cwd.startsWith(root + '\\')
 const codexStatus = (r: Rec, now: number) =>
   (r.started ?? 0) > 0 && (r.done ?? 0) >= (r.started ?? 0) ? 'completed' : now - r.mtime < 60e3 ? 'running' : 'idle'
 
@@ -273,12 +279,14 @@ export const register: Register = (on, options) => {
   t = STRINGS[(options.language as Lang) in STRINGS ? (options.language as Lang) : 'en']
   on('session.start', async ($, e, next) => {
     root = await $.session.cwd()
-    home = (await $.env.get('HOME')) ?? ''
+    os = (await $.env.get('OS')) === 'Windows_NT' ? 'win'
+      : (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Linux' ? 'linux' : 'mac'
+    home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
     sessionId = await $.session.id()
     const now = Date.now()
     await upsert($, 'main', { project: projectOf(root) }, { ...blank('main', now), title: t.mainSession, how: t.claudeSession, status: 'idle', cwd: root, sid: sessionId, journal: journalOf(root, sessionId) })
     await $.command.register({ name: 'agent-radar', description: t.cmdDescription })
-    void loadIcons($)
+    if (os === 'mac') void loadIcons($)
     $.clock.every(3000, () => {
       if (polling) return
       polling = true
@@ -538,7 +546,7 @@ export const register: Register = (on, options) => {
     }
     const openBtn = (a: Agent) =>
       a.open && (
-        <Button key={'o' + a.id.slice(-48)} plain onPress={() => run(['open', a.open!.url], t.chatOpened)}>
+        <Button key={'o' + a.id.slice(-48)} plain onPress={() => run(opener(a.open!.url), t.chatOpened)}>
           {/* The same mark as the Chat action: ↗ in Claude's color for Code, in Cowork's for a task. */}
           <Text color={a.open.kind === 'code' ? C.claude : C.work}>{' ↗'}</Text>
         </Button>
@@ -615,10 +623,12 @@ export const register: Register = (on, options) => {
       void $.process.run(argv).then(r => say(r.exitCode === 0 ? done : t.failed + (r.stderr || r.exitCode).toString().slice(0, 200)), () => say(t.cannotRun + argv[0]))
     const tool = (args: Parameters<typeof $.tool.call>[0], done: string) =>
       void $.tool.call(args).then(r => say('deny' in r && r.deny ? t.denied + r.deny : done), err => say(t.failed + String(err).slice(0, 200)))
-    const terminal = (cwd: string, cmd: string, done: string) =>
-      run(['osascript', '-e', `tell application "Terminal" to do script "${asq(`cd ${shq(cwd)} && ${cmd}`)}"`, '-e', 'tell application "Terminal" to activate'], done)
     const copy = (text: string, what: string) =>
       void $.ui.copy({ text, surface: e.surface }).then(r => say(r.isCopied ? t.copied(what) : t.noClipboard))
+    // Terminal.app on macOS; elsewhere terminals differ too much to drive, so the command goes to the clipboard.
+    const terminal = (cwd: string, cmd: string, done: string) => os === 'mac'
+      ? run(['osascript', '-e', `tell application "Terminal" to do script "${asq(`cd ${shq(cwd)} && ${cmd}`)}"`, '-e', 'tell application "Terminal" to activate'], done)
+      : copy(`cd ${shq(cwd)}${os === 'win' ? ';' : ' &&'} ${cmd}`, t.launchWhat)
     // One colored glyph and one word per action.
     const btn = (key: string, icon: string, word: string, color: string, onPress: () => void, primary?: boolean) => (
       <Button key={key + sel?.id.slice(-32)} variant={primary ? 'primary' : undefined} onPress={onPress}>
@@ -630,12 +640,13 @@ export const register: Register = (on, options) => {
       const sub = mine && a.family === 'claude' && a.id !== 'main'
       const stopId = sub ? a.id : a.taskId
       const out: ReturnType<typeof Button>[] = []
-      if (a.open) out.push(btn('a-open', '↗', t.btn.chat, C.claude!, () => run(['open', a.open!.url], t.chatOpened), true))
+      if (a.open) out.push(btn('a-open', '↗', t.btn.chat, C.claude!, () => run(opener(a.open!.url), t.chatOpened), true))
       // Only the session this mod runs in can be compacted from here; in "All sessions" it is the row with its id.
       if (a.family === 'claude' && a.sid === sessionId)
         out.push(btn('a-compact', '⇊', t.btn.compact, C.fresh!, () => void $.session.compact().then(r => say('skip' in r && r.skip ? t.compactSkipped + r.skip : t.compacted), err => say(t.compactFailed + String(err).slice(0, 200)))))
-      if (a.cwd && a.journal && (a.family === 'codex' || !a.parentId || a.id === 'main'))
-        out.push(btn('a-hand', '⇄', t.btn.handoff, C.work!, () => run(['open', handoffUrl(a.cwd!, a.title, a.journal!)], t.handedOff)))
+      // Handoff opens Claude Desktop, which has no Linux build.
+      if (os !== 'linux' && a.cwd && a.journal && (a.family === 'codex' || !a.parentId || a.id === 'main'))
+        out.push(btn('a-hand', '⇄', t.btn.handoff, C.work!, () => run(opener(handoffUrl(a.cwd!, a.title, a.journal!)), t.handedOff)))
       if (stopId && !ENDED.has(a.status))
         out.push(view.confirm === a.id
           ? btn('a-stop-yes', '■', t.btn.sure, C.failed!, () => tool({ tool: 'TaskStop', task_id: stopId }, t.stopped), true)
@@ -648,8 +659,8 @@ export const register: Register = (on, options) => {
       if (a.sid && a.cwd && (a.family === 'codex' || !a.parentId || a.id === 'main'))
         out.push(btn('a-cli', '❯_', t.btn.cli, a.family === 'codex' ? C.codex! : C.claude!, () =>
           terminal(a.cwd!, a.family === 'codex' ? `codex resume ${shq(a.sid!)}` : `claude --resume ${shq(a.sid!)}`, t.inTerminal)))
-      if (a.cwd) out.push(btn('a-dir', '🗀', t.btn.folder, C.work!, () => run(['open', a.cwd!], t.folderOpened)))
-      if (a.journal) out.push(btn('a-log', '≡', t.btn.logs, C.muted!, () => run(['open', '-R', a.journal!], t.logShown)))
+      if (a.cwd) out.push(btn('a-dir', '🗀', t.btn.folder, C.work!, () => run(opener(a.cwd!), t.folderOpened)))
+      if (a.journal) out.push(btn('a-log', '≡', t.btn.logs, C.muted!, () => run(reveal(a.journal!), t.logShown)))
       if (a.cmd) out.push(btn('a-cmd', '⧉', t.btn.cmd, C.muted!, () => copy(a.cmd!, t.launchWhat)))
       out.push(btn('a-id', '⧉', t.btn.id, C.muted!, () => copy(a.sid ?? a.id, t.idWhat)))
       out.push(btn('a-pin', pinned.has(a.id) ? '★' : '☆', pinned.has(a.id) ? t.btn.unpin : t.btn.pin, C.waiting!, () =>

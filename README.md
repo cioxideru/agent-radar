@@ -6,8 +6,8 @@ A live pane for [Claude Code](https://code.claude.com) that shows every agent wo
 
 ![Agent Radar pane](docs/screenshots/pane.png)
 
-> [!IMPORTANT]
-> **macOS only.** Agent Radar is a Claude Code **mod** — a plugin built on Claude Code's function-hooks technology (`hooks/register.tsx`, drawn through `ui.render` into a Pane). It reads macOS-specific locations (`~/Library/Application Support/Claude`, `/Applications/*.app`) and calls macOS tools (`open`, `osascript`, `sips`). Windows and Linux are not supported.
+> [!NOTE]
+> Agent Radar is a Claude Code **mod** — a plugin built on Claude Code's function-hooks technology (`hooks/register.tsx`, drawn through `ui.render` into a Pane). It is built and tested on **macOS**. **Linux and Windows** are supported but not yet tested on real machines: the pane and both scopes work the same; app icons are not shown, *CLI* copies the resume command instead of opening Terminal, and on Linux there is no Claude Desktop, so *open chat* and *handoff* are absent.
 
 > Screenshots show fictional projects and numbers.
 
@@ -27,9 +27,9 @@ A live pane for [Claude Code](https://code.claude.com) that shows every agent wo
 
 ## Requirements
 
-- macOS
+- macOS, Linux or Windows
 - Claude Code with mods support (function-hooks plugins), in the terminal or in the Claude desktop app
-- `python3` (ships with the Xcode command line tools) — used to scan session journals
+- Python 3 (`python3`; `python` on Windows) — used to scan session journals
 - Optional: [Codex CLI](https://github.com/openai/codex) or Codex Desktop, Claude Desktop — their sessions show up when present
 
 ## Install
@@ -101,9 +101,9 @@ There is no server and no network access. The mod runs inside Claude Code and re
 | Claude Code hooks (`agent.spawn`, `turn.step`, `tool.call`) | this session's subagents, their tokens and the `codex exec` commands they run |
 | `~/.claude/projects/**/*.jsonl` | other Claude Code sessions and subagents |
 | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `~/.codex/session_index.jsonl` | Codex runs: model, effort, tokens, context, rate limits, titles |
-| `~/Library/Application Support/Claude/claude-code-sessions` | which sessions belong to Claude Desktop, for the *open chat* link |
+| `~/Library/Application Support/Claude/claude-code-sessions` (`%APPDATA%\Claude` on Windows) | which sessions belong to Claude Desktop, for the *open chat* link |
 
-A small Python scanner (`scan.py`, embedded in `hooks/scan.ts`) reads the journals every 3 s for this project and every 10 s for all sessions. App icons are read from the installed apps at runtime and are not shipped with the mod.
+A small Python scanner (`scan.py`, embedded in `hooks/scan.ts`) reads the journals every 3 s for this project and every 10 s for all sessions. On macOS, app icons are read from the installed apps at runtime and are not shipped with the mod.
 
 ## Development
 
