@@ -47,6 +47,10 @@ export type View = {
   hidden?: string[]
   pinned?: string[]
   collapsed?: string[]
+  // Only running agents instead of all of them.
+  runningOnly?: boolean
+  // Families switched off in the pane: their agents are left out of the list.
+  off?: ('claude' | 'codex')[]
   confirm?: string
   note?: string
 }

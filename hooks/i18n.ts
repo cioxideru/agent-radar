@@ -7,7 +7,7 @@ const en = {
   cmdDescription: 'Agents pane: Claude subagents and the Codex runs they launch',
   opened: 'Agent Radar opened.',
   pinnedGroup: '★ Pinned',
-  head: { task: 'TASK', model: 'MODEL', effort: 'EFFORT', tokens: 'TOKENS', ctx: 'CTX', time: 'TIME', how: 'LAUNCH' },
+  head: { task: 'TASK', model: 'MODEL', effort: 'EFFORT', effortShort: 'EFT', tokens: 'TOKENS', tokensShort: 'TKNS', ctx: 'CTX', time: 'TIME', how: 'LAUNCH' },
   status: { running: 'running', waiting: 'waiting', idle: 'inactive', pending: 'queued', completed: 'done', failed: 'failed', killed: 'stopped' } as Record<string, string>,
   failed: 'Failed: ', cannotRun: 'Could not run ', denied: 'Denied: ', copied: (w: string) => w + ' copied', noClipboard: 'Clipboard unavailable',
   chatOpened: 'Chat opened in Claude Desktop', compactSkipped: 'Compact skipped: ', compacted: 'Context compacted', compactFailed: 'Compact failed: ',
@@ -22,8 +22,8 @@ const en = {
   context: 'Context ', of: ' of ', ctxAlt: 'context fill',
   codexLimit: 'Codex limit ', weekWindow: ' of the weekly window', hWindow: (h: number) => ` of a ${h}h window`, limitAlt: 'Codex limit',
   activityTitle: 'Activity · output tokens over time', activityAlt: 'activity chart', tools: 'Tools',
-  scope: { proj: 'This project', all: 'All sessions' }, finished: 'Finished', waitingYou: 'Waiting', hidden: (n: number) => ` Hidden ${n}`,
-  runningN: (n: number) => `${n} running`, scanning: 'Scanning journals…', none: 'No agents yet.',
+  scope: { proj: 'This project', all: 'All' }, finished: 'Finished', sumIn: 'In', sumOut: 'Out', sumTotal: 'Total', hidden: (n: number) => ` Hidden ${n}`,
+  runningN: (n: number) => `${n} Work`, scanning: 'Scanning journals…', none: 'No agents yet.',
   handoffPrompt: (title: string, journal: string) =>
     `Continue the work from the session "${title}". Its journal: ${journal}\nRead the end of the journal, recover the task, what is done and what is left, summarize briefly and carry on.`,
 }
@@ -38,7 +38,7 @@ const ru: Strings = {
   cmdDescription: 'Панель агентов: Claude-субагенты и запущенные ими Codex',
   opened: 'Agent Radar открыт.',
   pinnedGroup: '★ Закреплено',
-  head: { task: 'ЗАДАЧА', model: 'МОДЕЛЬ', effort: 'УСИЛИЕ', tokens: 'ТОКЕНЫ', ctx: 'КОНТ.', time: 'ВРЕМЯ', how: 'ЗАПУСК' },
+  head: { task: 'ЗАДАЧА', model: 'МОДЕЛЬ', effort: 'УСИЛИЕ', effortShort: 'УСЛ', tokens: 'ТОКЕНЫ', tokensShort: 'ТОК.', ctx: 'КОНТ.', time: 'ВРЕМЯ', how: 'ЗАПУСК' },
   status: { running: 'работает', waiting: 'ждёт', idle: 'неактивна', pending: 'в очереди', completed: 'завершён', failed: 'ошибка', killed: 'остановлен' },
   failed: 'Не получилось: ', cannotRun: 'Не получилось запустить ', denied: 'Отказано: ', copied: w => w + ' скопирован', noClipboard: 'Буфер обмена недоступен',
   chatOpened: 'Чат открыт в Claude Desktop', compactSkipped: 'Compact пропущен: ', compacted: 'Контекст сжат', compactFailed: 'Compact не удался: ',
@@ -53,8 +53,8 @@ const ru: Strings = {
   context: 'Контекст ', of: ' из ', ctxAlt: 'заполнение контекста',
   codexLimit: 'Лимит Codex ', weekWindow: ' недельного окна', hWindow: h => ` окна ${h}ч`, limitAlt: 'лимит Codex',
   activityTitle: 'Активность · выходные токены по времени', activityAlt: 'график активности', tools: 'Инструменты',
-  scope: { proj: 'Этот проект', all: 'Все сессии' }, finished: 'Завершённые', waitingYou: 'Ждут', hidden: n => ` Скрытые ${n}`,
-  runningN: n => `${n} работают`, scanning: 'Сканирую журналы…', none: 'Агентов пока нет.',
+  scope: { proj: 'Этот проект', all: 'Все' }, finished: 'Завершённые', sumIn: 'Вход', sumOut: 'Выход', sumTotal: 'Всего', hidden: n => ` Скрытые ${n}`,
+  runningN: n => `${n} в работе`, scanning: 'Сканирую журналы…', none: 'Агентов пока нет.',
   handoffPrompt: (title, journal) =>
     `Продолжи работу из сессии «${title}». Её журнал: ${journal}\nПрочитай конец журнала, восстанови задачу, что сделано и что осталось, коротко перескажи и продолжай.`,
 }

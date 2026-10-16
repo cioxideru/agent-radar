@@ -117,3 +117,18 @@ test('hiding a root hides its whole tree, and a root folds and unfolds', async (
   expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeUndefined()
   await ui.unmount()
 })
+
+test('the Claude counter switches Claude agents off and a second press brings them back', async ($, on) => {
+  on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: 'A1' }) as never)
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  await $.agent.spawn({ prompt: 'audit', description: 'Geometry audit', subagentType: 'general-purpose' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true })
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  const claude = (await ui.find({ type: 'Button', key: 'cb-claude' } as never)) as { key: string }
+  await ui.press({ key: claude.key })
+  expect(await ui.find({ type: 'Text', text: /Geometry audit/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeDefined()
+  await ui.press({ key: claude.key })
+  expect(await ui.find({ type: 'Text', text: /Geometry audit/ })).toBeDefined()
+  await ui.unmount()
+})

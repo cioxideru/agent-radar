@@ -52,6 +52,34 @@ claude plugin install agent-radar@agent-radar --scope user
 
 Панель открывается сама при старте сессии; `/agent-radar` открывает её снова.
 
+### Обновление и удаление
+
+```bash
+claude plugin marketplace update agent-radar
+```
+
+```bash
+claude plugin update agent-radar@agent-radar
+```
+
+```bash
+claude plugin uninstall agent-radar@agent-radar
+```
+
+В открытой сессии `/reload-plugins` подхватывает новую версию без перезапуска.
+
+### Из клона
+
+Чтобы попробовать локальную копию без установки, запустите Claude Code с папкой как каталогом плагина:
+
+```bash
+git clone https://github.com/cioxideru/agent-radar.git
+```
+
+```bash
+claude --plugin-dir ./agent-radar
+```
+
 ## Настройки
 
 | Параметр | Значения | По умолчанию |

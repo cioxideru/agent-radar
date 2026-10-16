@@ -46,6 +46,10 @@ let sessionId = ''
 // The current session's context window, used for Claude rows whose journal does not record one.
 // ponytail: one window for every Claude model; a per-model table if they diverge.
 let claudeWindow = 0
+// The compaction window (/context's "Auto-compact window"), which caps the context below the model's own limit when
+// auto-compaction or CLAUDE_CODE_AUTO_COMPACT_WINDOW sets it; read from the context breakdown at most once a minute.
+let compactWindow = 0
+let compactAt = 0
 // One poll at a time; the all-sessions scan re-reads every active journal, so it runs at most every 10 s.
 let polling = false
 let lastAll = 0
@@ -62,6 +66,8 @@ export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 export const asq = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
 export const projectOf = (cwd = '') => cwd.replace(/\/\.(claude|codex)\/worktrees\/.*$/, '').split('/').pop() || cwd
+// Without the tenth of a million, for the narrowed token column.
+export const fmtKShort = (n: number) => (n >= 1e6 ? Math.round(n / 1e6) + 'M' : fmtK(n))
 export const fmtK = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n))
 export const fmtT = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1e3)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60)
@@ -141,10 +147,12 @@ async function pollProject($: $) {
     return next
   })
 
-  const usage = await $.session.usage().catch(() => undefined)
+  const usage = await $.session.usage(now - compactAt > 60e3 ? { breakdown: 'summary' } : undefined).catch(() => undefined)
   if (usage) {
-    claudeWindow = usage.context.window
-    await upsert($, 'main', { stats: { ctx: usage.context.tokens, ctxWindow: usage.context.window, lastAt: now } })
+    const raw = usage.context.breakdown?.rawMaxTokens
+    if (raw) (compactWindow = raw), (compactAt = now)
+    claudeWindow = compactWindow || usage.context.window
+    await upsert($, 'main', { stats: { ctx: usage.context.tokens, ctxWindow: claudeWindow, lastAt: now } })
   }
   const rows = await read($, agents)
   const running = rows.filter(a => a.status === 'running' && a.id !== 'main').length
@@ -229,11 +237,14 @@ const C: Record<string, string> = {
   completed: '#6c7284', failed: '#f06a5f', killed: '#f06a5f', muted: '#8a90a0', work: '#e0a46e', fresh: '#5aa9e6', cache: '#5c6378', rail: '#8a90a066',
 }
 const SOFT: Record<string, string> = { claude: '#a98bf026', codex: '#3cc4ae26', sel: '#a98bf01f' }
+// Boxes have no corner radius of their own: a round border in the fill's own color draws the fill with rounded corners.
+const BAR = '#8a90a01a'
+const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
 // Launchers drawn as their app: icon (graphical surfaces) and the logo's color.
 const APPS: Record<string, { app: string; color: string; short: string }> = {
-  'Claude Desktop': { app: 'claude', color: '#D97757', short: 'Desktop' },
+  'Claude Desktop': { app: 'claude', color: '#D97757', short: 'Claude' },
   'Claude Code CLI': { app: 'claude', color: '#D97757', short: 'CLI' },
-  'Codex Desktop': { app: 'codex', color: '#8B8CF8', short: 'Desktop' },
+  'Codex Desktop': { app: 'codex', color: '#8B8CF8', short: 'Codex' },
 }
 const APP_ICON_FILES: Record<string, string> = {
   claude: '/Applications/Claude.app/Contents/Resources/electron.icns',
@@ -248,8 +259,15 @@ async function loadIcons($: $) {
     if (b64) ICONS[app] = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><image width="32" height="32" href="data:image/png;base64,${b64}"/></svg>`
   }
 }
-const W = { model: 15, cmodel: 12, eff: 7, tok: 6, bar: 5, ctx: 5, time: 6, how: 16 }
+// `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
+const W = { model: 12, modelShort: 10, cmodel: 12, eff: 6, effShort: 3, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
 
+
+// The pane opens with this session's details showing, as if its row had been pressed.
+async function openPane($: $) {
+  await update($, viewA, v => ({ ...v, sel: 'main', note: undefined, confirm: undefined }))
+  await $.ui.open({ id: PANE, title: 'Agent Radar' })
+}
 
 export const register: Register = (on, options) => {
   t = STRINGS[(options.language as Lang) in STRINGS ? (options.language as Lang) : 'en']
@@ -267,12 +285,12 @@ export const register: Register = (on, options) => {
       void Promise.allSettled([pollProject($), Date.now() - lastAll >= 10e3 ? pollAll($) : undefined]).finally(() => (polling = false))
     })
     $.clock.every(1000, () => void read($, agents).then(l => { if (l.some(a => a.status === "running")) return update($, tick, n => n + 1) }).catch(() => {}))
-    void $.ui.open({ id: PANE, title: 'Agent Radar' })
+    void openPane($)
     return next(e)
   })
 
   on('command.run', { command: 'agent-radar' }, async $ => {
-    await $.ui.open({ id: PANE, title: 'Agent Radar' })
+    await openPane($)
     return { text: t.opened }
   })
 
@@ -367,28 +385,40 @@ export const register: Register = (on, options) => {
     }
     const now = Date.now()
     const cols = e.props.bodyColumns ?? 100
-    const compact = cols < 80, showHow = cols >= 96, showEff = true
     const web = e.surface !== 'terminal'
+    // Narrowing steps: the launch column goes first, then effort shrinks to one square under a short header, and only
+    // then do rows become two-line cards.
+    const compact = cols < 64, tight = cols < 88, showHow = cols >= 96, showEff = true
+    const effW = tight ? W.effShort : W.eff, modelW = tight ? W.modelShort : W.model
+    // Token column: count over a bar (desktop), count beside a bar (terminal); narrowed with the effort column.
+    const barW = web ? (tight ? W.bar : W.bar + 2) : W.bar, numW = tight ? 4 : W.tok
+    const fmtTok = tight ? fmtKShort : fmtK
     const setView = (p: Partial<View>) => update($, viewA, v => ({ ...v, ...p }))
     const running = list.filter(a => a.status === 'running').length
     const nCodex = list.filter(a => a.family === 'codex').length
-    const tok = list.reduce((s, a) => s + a.tokIn + a.tokOut, 0)
-    const maxTok = Math.max(1, ...list.map(a => a.tokIn + a.tokOut))
-    const sel = list.find(a => a.id === view.sel)
+    const tokIn = list.reduce((s, a) => s + a.tokIn, 0), tokOut = list.reduce((s, a) => s + a.tokOut, 0), tok = tokIn + tokOut
+    // The counters double as switches, all on by default: one switched off leaves its agents out of the list.
+    // The counts stay those of the whole list.
+    const off = new Set(view.off ?? [])
+    const shown = list.filter(a => !off.has(a.family as 'claude' | 'codex') && (!view.runningOnly || a.status === 'running'))
+    const maxTok = Math.max(1, ...shown.map(a => a.tokIn + a.tokOut))
+    // 'main' stands for this session: in "All" it is the scanned row carrying this session's id.
+    const selId = view.sel === 'main' && view.scope === 'all' ? shown.find(a => a.family === 'claude' && a.sid === sessionId)?.id : view.sel
+    const sel = shown.find(a => a.id === selId)
     // A pinned agent and everything under it form the first group; the rest group by project.
-    const byId = new Map(list.map(a => [a.id, a]))
+    const byId = new Map(shown.map(a => [a.id, a]))
     const rootOf = (a: Agent): Agent => (a.parentId && byId.has(a.parentId) ? rootOf(byId.get(a.parentId)!) : a)
     const PINNED = ' pinned'
     const groupOf = (a: Agent) => (pinned.has(rootOf(a).id) ? PINNED : a.project.toLowerCase())
-    const projects = [...new Map(list.map(a => [groupOf(a), groupOf(a) === PINNED ? t.pinnedGroup : a.project])).entries()].sort(([x], [y]) => x.localeCompare(y))
+    const projects = [...new Map(shown.map(a => [groupOf(a), groupOf(a) === PINNED ? t.pinnedGroup : a.project])).entries()].sort(([x], [y]) => x.localeCompare(y))
 
     const head = (
       <Box key="head" flexDirection="row" gap={1} paddingX={1} width="100%">
         <Box width={2} flexShrink={0}><Text> </Text></Box>
         <Box flexGrow={1} flexShrink={1} minWidth={0}><Text dimColor bold>{t.head.task}</Text></Box>
-        <Box width={W.model} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.model}</Text></Box>
-        {showEff && <Box width={W.eff} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.effort}</Text></Box>}
-        <Box width={web ? W.bar + 2 : W.tok + 1 + W.bar} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text dimColor bold>{t.head.tokens}</Text></Box>
+        <Box width={modelW} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.model}</Text></Box>
+        {showEff && <Box width={effW} flexShrink={0} overflow="hidden"><Text dimColor bold>{tight ? t.head.effortShort : t.head.effort}</Text></Box>}
+        <Box width={web ? barW : numW + 1 + barW} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text dimColor bold>{tight ? t.head.tokensShort : t.head.tokens}</Text></Box>
         <Box width={W.ctx} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text dimColor bold>{t.head.ctx}</Text></Box>
         <Box width={W.time} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text dimColor bold>{t.head.time}</Text></Box>
         {showHow && <Box width={W.how} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.how}</Text></Box>}
@@ -416,27 +446,27 @@ export const register: Register = (on, options) => {
     // Tokens spent: the count in small type over a bar scaled to the busiest agent shown (desktop); count and bar side by side (terminal).
     const tokCell = (a: Agent) => {
       const t = a.tokIn + a.tokOut
-      const filled = Math.max(t ? 1 : 0, Math.round((t / maxTok) * W.bar))
-      const wide = Math.round((filled * (W.bar + 2)) / W.bar)
+      const filled = Math.max(t ? 1 : 0, Math.round((t / maxTok) * barW))
       return web ? (
-        <Box key={'k' + a.id.slice(-40)} width={W.bar + 2} flexShrink={0} flexDirection="column" alignItems="flex-end">
-          <Text mono size="footnote">{fmtK(t)}</Text>
-          <Box width={W.bar + 2} flexShrink={0} overflow="hidden">
-            <Text mono color={C[a.family]}>{'━'.repeat(wide)}</Text>
-            <Text mono color={C.muted} dimColor>{'━'.repeat(W.bar + 2 - wide)}</Text>
+        <Box key={'k' + a.id.slice(-40)} width={barW} flexShrink={0} flexDirection="column" alignItems="flex-end">
+          <Text mono size="footnote">{fmtTok(t)}</Text>
+          <Box width={barW} flexShrink={0} overflow="hidden">
+            <Text mono color={C[a.family]}>{'━'.repeat(filled)}</Text>
+            <Text mono color={C.muted} dimColor>{'━'.repeat(barW - filled)}</Text>
           </Box>
         </Box>
       ) : (
         <Box key={'k' + a.id.slice(-40)} flexDirection="row" gap={1} flexShrink={0}>
-          <Box width={W.tok} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text>{fmtK(t)}</Text></Box>
-          <Box width={W.bar} flexShrink={0} overflow="hidden">
+          <Box width={numW} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text>{fmtTok(t)}</Text></Box>
+          <Box width={barW} flexShrink={0} overflow="hidden">
             <Text color={C[a.family]}>{'━'.repeat(filled)}</Text>
-            <Text color={C.muted} dimColor>{'━'.repeat(W.bar - filled)}</Text>
+            <Text color={C.muted} dimColor>{'━'.repeat(barW - filled)}</Text>
           </Box>
         </Box>
       )
     }
-    // Effort as five squares, the filled ones in the level's color.
+    // Effort as five squares, the filled ones all in the level's color: low one white, medium two yellow, high three
+    // green, xhigh four blue, max five purple.
     const effText = (effort?: string) => {
       const n = EFF.indexOf(effort ?? '') + 1
       return (
@@ -446,34 +476,44 @@ export const register: Register = (on, options) => {
         </Text>
       )
     }
-    // Fold toggle on a root row with children: ▾ open, ▸ folded with the number of agents under it.
+    // One large square in the level's color instead of five, for a pane too narrow for the full meter.
+    const effCube = (effort?: string) => (
+      <Text size="heading" color={EFF_COLOR[EFF.indexOf(effort ?? '')] ?? C.muted}>{effort ? '■' : '—'}</Text>
+    )
+    // Fold toggle on a root row with children: ▾ open, ▸ folded with the number of agents under it in its own color.
+    // The glyph is drawn at title size so it fills the two-line row on graphical surfaces.
     const foldBtn = (a: Agent, n: number) => n > 0 && (
       <Button key={'v' + a.id.slice(-48)} plain onPress={() => void update($, viewA, v => ({
         ...v, collapsed: collapsed.has(a.id) ? (v.collapsed ?? []).filter(x => x !== a.id) : [...(v.collapsed ?? []), a.id],
       }))}>
-        <Text color={C.muted}>{collapsed.has(a.id) ? `▸ ${n} ` : '▾ '}</Text>
+        <Text size="title" color={C.muted}>{collapsed.has(a.id) ? '▸' : '▾'}</Text>
+        {collapsed.has(a.id) ? <Text bold color={C.fresh}>{' ' + n}</Text> : ''}
+        {' '}
       </Button>
     )
     const row = (a: Agent, guide: string, fold?: ReturnType<typeof foldBtn>) => {
       const k = a.id.slice(-48)
-      const isSel = a.id === view.sel
+      const isSel = a.id === selId
       return (
-        <Box key={'r' + k} flexDirection="row" gap={1} paddingX={1} width="100%" alignItems="center" backgroundColor={isSel && web ? SOFT.sel : undefined}>
+        <Box key={'r' + k} flexDirection="row" gap={1} paddingX={1} width="100%" alignItems="center" backgroundColor={isSel && web ? SOFT.sel : undefined} {...(isSel && web ? ROUND_SEL : {})}>
           <Box width={2} flexShrink={0}><Text color={C[a.status] ?? C.muted}>●</Text></Box>
-          <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row">
+          <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden" flexDirection="row" alignItems="center">
             {guide && <Text mono={web || undefined} color={C.muted}>{guide}</Text>}
             {fold}
-            <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
-              <Text bold={isSel} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
-            </Button>
-            {openBtn(a)}
+            {/* The title alone gives way to a long name, so the ↗ after it keeps its place and never runs into the model. */}
+            <Box flexShrink={1} minWidth={0} overflow="hidden">
+              <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
+                <Text bold={isSel} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
+              </Button>
+            </Box>
+            {a.open && <Box flexShrink={0}>{openBtn(a)}</Box>}
           </Box>
-          <Box width={W.model} flexShrink={0} overflow="hidden">
+          <Box width={modelW} flexShrink={0} overflow="hidden">
             <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (a.model || '…') + ' '}</Text>
           </Box>
           {showEff && (
-            <Box width={W.eff} flexShrink={0} overflow="hidden">
-              {effText(a.effort)}
+            <Box width={effW} flexShrink={0} overflow="hidden">
+              {tight ? effCube(a.effort) : effText(a.effort)}
             </Box>
           )}
           {tokCell(a)}
@@ -507,19 +547,28 @@ export const register: Register = (on, options) => {
     // `guide` and `cont` draw the tree in text where the surface joins box glyphs (the terminal); `pad` is their width.
     const card = (a: Agent, guide: string, cont: string, pad: number, fold?: ReturnType<typeof foldBtn>) => {
       const k = a.id.slice(-48)
-      const isSel = a.id === view.sel
+      const isSel = a.id === selId
+      // A launcher with an app icon shows the icon alone beside the title; text launchers stay on the second line.
+      const app = APPS[a.how]
+      const icon = Svg && app && ICONS[app.app]
       return (
-        <Box key={'c' + k} flexDirection="column" paddingX={1} width="100%" backgroundColor={isSel && web ? SOFT.sel : undefined}>
+        <Box key={'c' + k} flexDirection="column" paddingX={1} width="100%" backgroundColor={isSel && web ? SOFT.sel : undefined} {...(isSel && web ? ROUND_SEL : {})}>
           <Box flexDirection="row" gap={1} width="100%">
             {pad > 0 && <Box width={pad} flexShrink={0}><Text color={C.muted}>{guide}</Text></Box>}
             <Box width={2} flexShrink={0}><Text color={C[a.status] ?? C.muted}>●</Text></Box>
-            <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row">
+            <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden" flexDirection="row" alignItems="center">
               {fold}
               <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
                 <Text bold={isSel} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
               </Button>
-              {openBtn(a)}
             </Box>
+            {/* Outside the shrinking title, so a squeezed card truncates the title instead of piling these up. */}
+            {(a.open || icon) && (
+              <Box flexShrink={0} flexDirection="row" gap={1} alignItems="center">
+                {openBtn(a)}
+                {icon && <Svg source={icon} alt={a.how} width={16} height={16} />}
+              </Box>
+            )}
             <Box width={W.time} flexShrink={0} justifyContent="flex-end"><Text mono={web || undefined} dimColor={!!a.t1}>{fmtT((a.t1 ?? now) - a.t0)}</Text></Box>
           </Box>
           {/* Second line: the same fixed cells on every card, so models, effort and tokens line up down the list. */}
@@ -529,20 +578,21 @@ export const register: Register = (on, options) => {
             <Box width={W.cmodel} flexShrink={0} overflow="hidden">
               <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (a.model || '…') + ' '}</Text>
             </Box>
-            <Box width={W.eff} flexShrink={0}>
-              {effText(a.effort)}
-            </Box>
+            <Box width={2} flexShrink={0} alignItems="center">{effCube(a.effort)}</Box>
             {tokCell(a)}
             {ctxCell(a)}
-            <Box flexGrow={1} flexShrink={1} minWidth={0}>{howCell(a)}</Box>
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>{!icon && howCell(a)}</Box>
           </Box>
         </Box>
       )
     }
+    // Details grid cell: half the box on a narrow pane, so there are always two columns however far it is squeezed;
+    // a fixed width on a wide one, so the cells flow three or four to a row.
+    const fw = compact ? '50%' : W.field
     const field = (label: string, value: string) => (
-      <Box key={'f' + label} flexDirection="column" width={22}>
+      <Box key={'f' + label} flexDirection="column" width={fw} paddingRight={1}>
         <Text dimColor>{label}</Text>
-        <Text>{value}</Text>
+        <Text wrap="truncate-end">{value}</Text>
       </Box>
     )
     const ago = (ms?: number) => (ms ? fmtT(now - ms) + t.ago : '—')
@@ -581,7 +631,8 @@ export const register: Register = (on, options) => {
       const stopId = sub ? a.id : a.taskId
       const out: ReturnType<typeof Button>[] = []
       if (a.open) out.push(btn('a-open', '↗', t.btn.chat, C.claude!, () => run(['open', a.open!.url], t.chatOpened), true))
-      if (mine && a.id === 'main')
+      // Only the session this mod runs in can be compacted from here; in "All sessions" it is the row with its id.
+      if (a.family === 'claude' && a.sid === sessionId)
         out.push(btn('a-compact', '⇊', t.btn.compact, C.fresh!, () => void $.session.compact().then(r => say('skip' in r && r.skip ? t.compactSkipped + r.skip : t.compacted), err => say(t.compactFailed + String(err).slice(0, 200)))))
       if (a.cwd && a.journal && (a.family === 'codex' || !a.parentId || a.id === 'main'))
         out.push(btn('a-hand', '⇄', t.btn.handoff, C.work!, () => run(['open', handoffUrl(a.cwd!, a.title, a.journal!)], t.handedOff)))
@@ -631,19 +682,19 @@ export const register: Register = (on, options) => {
             <Box flexGrow={1} />
             <Text color={C[sel.status] ?? C.muted} backgroundColor={web ? (C[sel.status] ?? C.muted) + '26' : undefined}>{' ' + (t.status[sel.status] ?? sel.status) + ' '}</Text>
           </Box>
-          <Box flexDirection="row" flexWrap="wrap" columnGap={3} rowGap={1}>
-            <Box flexDirection="column" width={20}>
+          <Box flexDirection="row" flexWrap="wrap" columnGap={compact ? 0 : 2} rowGap={1}>
+            <Box flexDirection="column" width={fw} paddingRight={1}>
               <Text dimColor>{t.f.model}</Text>
-              <Text color={fam} backgroundColor={web ? SOFT[sel.family] : undefined}>{' ' + (sel.model || '—') + ' '}</Text>
+              <Text color={fam} backgroundColor={web ? SOFT[sel.family] : undefined} wrap="truncate-end">{' ' + (sel.model || '—') + ' '}</Text>
             </Box>
-            <Box flexDirection="column" width={16}>
+            <Box flexDirection="column" width={fw} paddingRight={1}>
               <Text dimColor>{t.f.effort}</Text>
               <Text>{effText(sel.effort)}<Text color={n ? EFF_COLOR[n - 1] : undefined}>{' ' + (sel.effort ?? '')}</Text></Text>
             </Box>
             {field(t.f.running, fmtT((sel.t1 ?? now) - sel.t0))}
             {field(t.f.activity, ago(st.lastAt))}
             {st.requests !== undefined && field(t.f.requests, String(st.requests) + (st.turns ? ` · ${st.turns} ${t.f.turns}` : ''))}
-            <Box flexDirection="column" width={22}>
+            <Box flexDirection="column" width={fw} paddingRight={1}>
               <Text dimColor>{t.f.launch}</Text>
               {howCell(sel)}
             </Box>
@@ -733,46 +784,83 @@ export const register: Register = (on, options) => {
                 const f = a === r ? fold : undefined
                 return compact ? card(a, guide, cont + (open ? '│' : ''), guide.length || (open ? 1 : 0), f) : row(a, guide, f)
               })),
-          ...(detail && holds(r, view.sel) && (!shut || view.sel === r.id) ? [detail] : []),
+          ...(detail && holds(r, selId) && (!shut || selId === r.id) ? [detail] : []),
         ]
       })
     }
 
+    // Counters that filter the list. Running keeps its green circle outside the Button and shows only running agents
+    // while pressed, its label on a light green tint;
+    // Claude and Codex each switch their family off and on. The name keeps its color outside the Button (a desktop
+    // draws a Button's text in its own color); the count is the Button, with a checkbox showing the switch. Off, the
+    // name turns gray and the Button dims.
+    const family = (f: 'claude' | 'codex', name: string, n: number) => (
+      <Box key={'c-' + f} flexDirection="row" alignItems="center" gap={1}>
+        <Text color={off.has(f) ? C.muted : C[f]}>{name}</Text>
+        <Button key={'cb-' + f} dimColor={off.has(f)} onPress={() => void update($, viewA, v => ({
+          ...v, off: off.has(f) ? (v.off ?? []).filter(x => x !== f) : [...(v.off ?? []), f],
+        }))}>
+          {off.has(f) ? '☐ ' : '☑ '}<Text bold>{String(n)}</Text>
+        </Button>
+      </Box>
+    )
     return (
       <Box flexDirection="column" gap={1}>
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
-          {/* Same look as the action buttons: a glyph and a word; the filter's glyph shows whether finished agents are visible. */}
-          <Button key="s-proj" variant={view.scope === 'proj' ? 'primary' : undefined} onPress={() => void setView({ scope: 'proj' })}>
-            <Text color={view.scope === 'proj' ? undefined : C.claude}>⌂</Text>{' ' + t.scope.proj}
-          </Button>
-          <Button key="s-all" variant={view.scope === 'all' ? 'primary' : undefined} onPress={() => void setView({ scope: 'all' }).then(() => pollAll($))}>
-            <Text color={view.scope === 'all' ? undefined : C.codex}>◎</Text>{' ' + t.scope.all}
-          </Button>
-          <Button key="f-done" onPress={() => void setView({ showDone: !view.showDone }).then(() => pollAll($))}>
-            <Text color={view.showDone ? C.running : C.muted}>{view.showDone ? '◉' : '◌'}</Text>{' ' + t.finished}
-          </Button>
-          <Button key="f-needs" onPress={() => void $.process.run(['open', 'claude://code/needs-input?source=agent-radar'])}><Text color={C.waiting}>◔</Text>{' ' + t.waitingYou}</Button>
-          {hidden.size > 0 && (
-            <Button key="f-hidden" onPress={() => void setView({ hidden: [] })}><Text color={C.muted}>⊘</Text>{t.hidden(hidden.size)}</Button>
-          )}
-        </Box>
-        <Box flexDirection="row" gap={2} flexWrap="wrap" paddingX={1}>
-          <Text><Text color={C.running}>● </Text>{t.runningN(running)}</Text>
-          <Text><Text color={C.claude}>Claude </Text>{String(list.length - nCodex)}</Text>
-          <Text><Text color={C.codex}>Codex </Text>{String(nCodex)}</Text>
-          <Text>{fmtK(tok)}</Text>
+        {/* The switches sit on one full-width panel, set apart from the list of sessions under it: a tint on graphical
+            surfaces, a rounded frame in the terminal. */}
+        <Box key="bar" flexDirection="column" gap={1} width="100%" paddingX={1} paddingY={1}
+          backgroundColor={web ? BAR : undefined} borderStyle="round" borderColor={web ? BAR : C.muted}>
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            {/* The scope is a choice of one, drawn as radio buttons a space apart with the chosen one primary; finished
+                agents are a switch, drawn as a checkbox like the Claude and Codex counters, set apart by a rule. */}
+            <Box key="scope" flexDirection="row" gap={1}>
+              <Button key="s-proj" variant={view.scope === 'proj' ? 'primary' : undefined} onPress={() => void setView({ scope: 'proj' })}>
+                {(view.scope === 'proj' ? '◉ ' : '○ ') + t.scope.proj}
+              </Button>
+              <Button key="s-all" variant={view.scope === 'all' ? 'primary' : undefined} onPress={() => void setView({ scope: 'all' }).then(() => pollAll($))}>
+                {(view.scope === 'all' ? '◉ ' : '○ ') + t.scope.all}
+              </Button>
+            </Box>
+            <Box key="rule" alignItems="center"><Text color={C.muted}>│</Text></Box>
+            <Button key="f-done" onPress={() => void setView({ showDone: !view.showDone }).then(() => pollAll($))}>
+              {(view.showDone ? '☑ ' : '☐ ') + t.finished}
+            </Button>
+            {hidden.size > 0 && (
+              <Button key="f-hidden" onPress={() => void setView({ hidden: [] })}><Text color={C.muted}>⊘</Text>{t.hidden(hidden.size)}</Button>
+            )}
+          </Box>
+          <Box flexDirection="row" gap={1} flexWrap="wrap" paddingX={1}>
+            <Box key="c-running" flexDirection="row" alignItems="center">
+              <Text color={C.running}>●</Text>
+              {/* The tint hugs the Button itself, so it never reaches past what a press lands on. No round border here:
+                a desktop draws a border a whole cell wide, which would make this one control taller than its row. */}
+            <Box marginLeft={1} backgroundColor={view.runningOnly ? C.running + '40' : undefined}>
+                <Button key="cb-running" plain onPress={() => void setView({ runningOnly: !view.runningOnly })}>{t.runningN(running)}</Button>
+              </Box>
+            </Box>
+            {family('claude', 'Claude', list.length - nCodex)}
+            {family('codex', 'Codex', nCodex)}
+            {/* Token sums by width: in, out and total on a wide pane, the total alone as it narrows, nothing on a
+                narrow one rather than a line of its own. */}
+            {!compact && (
+              <Text>
+                {!tight && <Text><Text dimColor>{t.sumIn + ' '}</Text>{fmtK(tokIn) + '  '}<Text dimColor>{t.sumOut + ' '}</Text>{fmtK(tokOut) + '  '}</Text>}
+                <Text dimColor>{t.sumTotal + ' '}</Text>{fmtK(tok)}
+              </Text>
+            )}
+          </Box>
         </Box>
         <Box flexDirection="column">
           {!compact && head}
-          {list.length === 0 && <Box paddingX={1}><Text dimColor>{view.scope === 'all' ? t.scanning : t.none}</Text></Box>}
+          {shown.length === 0 && <Box paddingX={1}><Text dimColor>{view.scope === 'all' ? t.scanning : t.none}</Text></Box>}
           {view.scope === 'proj'
-            ? rows(list)
+            ? rows(shown)
             : projects.flatMap(([g, p]) => [
                 <Box key={'p' + p} paddingX={1} marginTop={1}>
                   <Text color={C.muted} bold>{p.toUpperCase()}</Text>
-                  <Text dimColor>{'  ' + list.filter(a => groupOf(a) === g).length}</Text>
+                  <Text dimColor>{'  ' + shown.filter(a => groupOf(a) === g).length}</Text>
                 </Box>,
-                ...rows(list.filter(a => groupOf(a) === g)),
+                ...rows(shown.filter(a => groupOf(a) === g)),
               ])}
         </Box>
       </Box>

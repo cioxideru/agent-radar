@@ -20,6 +20,20 @@ Guide for AI coding agents and contributors working on Agent Radar, a Claude Cod
 
 `.claude-plugin/types/` is written by the engine when the mod loads and is git-ignored.
 
+## Installing in Claude Code
+
+Users install from this repository as a marketplace (full steps in `README.md`, *Install*):
+
+```bash
+claude plugin marketplace add cioxideru/agent-radar
+```
+
+```bash
+claude plugin install agent-radar@agent-radar --scope user
+```
+
+While developing, load the working copy instead: `claude --plugin-dir .`, then `/reload-plugins` after each edit.
+
 ## Checks
 
 Run all three before a commit:
