@@ -1,0 +1,5 @@
+{
+  "name": "agent-radar",
+  "owner": { "name": "cioxideru" },
+  "plugins": [{ "name": "agent-radar", "source": "./", "description": "Live pane of running Claude subagents and Codex runs (macOS)" }]
+}
