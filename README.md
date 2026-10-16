@@ -13,7 +13,7 @@ A live pane for [Claude Code](https://code.claude.com) that shows every agent wo
 
 ## Features
 
-- **Two scopes.** *This project* shows the current session, its subagents and the Codex runs they started. *All sessions* scans every Claude Code and Codex session active in the last 15 minutes (2 hours with *Finished* on), grouped by project.
+- **Two scopes.** *This project* shows the current session, its subagents and the Codex runs they started. *All* scans every Claude Code and Codex session active in the last 15 minutes (2 hours with *Finished* on), grouped by project.
 - **One row per agent:** status dot, task title, model, effort (five squares: low · medium · high · xhigh · max), tokens in + out with a bar scaled to the busiest agent, context window fill (green < 50%, blue < 75%, yellow < 90%, red), elapsed time, how it was launched (Claude Desktop, Claude Code CLI, Agent SDK, `codex exec`, Codex Desktop, background or not).
 - **Nesting.** A Codex run launched from a subagent's Bash call appears under that subagent; Codex subagents appear under their parent thread.
 - **Details** open under the clicked row's tree: token breakdown (new input, cache read/write, output, reasoning), context and Codex rate-limit meters, an activity sparkline, the tools used, the exact launch command.
@@ -25,7 +25,7 @@ A live pane for [Claude Code](https://code.claude.com) that shows every agent wo
 
 ![Details](docs/screenshots/details.png)
 
-**All sessions**, grouped by project:
+**All**: every session, grouped by project:
 
 ![All sessions](docs/screenshots/all-sessions.png)
 
