@@ -21,9 +21,17 @@ A live pane for [Claude Code](https://code.claude.com) that shows every agent wo
 - **Compact layout** for narrow panes: two lines per agent, columns still aligned.
 - **English and Russian** interface.
 
-| Details | All sessions | Compact |
-|---|---|---|
-| ![Details](docs/screenshots/details.png) | ![All sessions](docs/screenshots/all-sessions.png) | ![Compact](docs/screenshots/compact.png) |
+**Details** of the selected row:
+
+![Details](docs/screenshots/details.png)
+
+**All sessions**, grouped by project:
+
+![All sessions](docs/screenshots/all-sessions.png)
+
+**Compact** layout in a narrow pane:
+
+<img src="docs/screenshots/compact.png" alt="Compact" width="500">
 
 ## Requirements
 

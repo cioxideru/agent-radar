@@ -21,9 +21,17 @@
 - **Компактный вид** для узкой панели: две строки на агента, колонки выровнены.
 - **Интерфейс на английском и русском.**
 
-| Подробности | Все сессии | Компактно |
-|---|---|---|
-| ![Подробности](docs/screenshots/details.png) | ![Все сессии](docs/screenshots/all-sessions.png) | ![Компактно](docs/screenshots/compact.png) |
+**Подробности** выбранной строки:
+
+![Подробности](docs/screenshots/details.png)
+
+**Все сессии**, по проектам:
+
+![Все сессии](docs/screenshots/all-sessions.png)
+
+**Компактный вид** в узкой панели:
+
+<img src="docs/screenshots/compact.png" alt="Компактно" width="500">
 
 ## Требования
 
