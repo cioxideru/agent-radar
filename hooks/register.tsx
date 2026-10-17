@@ -892,9 +892,12 @@ export const register: Register = (on, options) => {
           {view.scope === 'proj'
             ? rows(shown)
             : projects.flatMap(([g, p]) => [
-                <Box key={'p' + p} paddingX={1} marginTop={1}>
+                <Box key={'p' + p} flexDirection="row" gap={1} alignItems="center" paddingX={1} marginTop={1}>
                   <Text color={C.muted} bold>{p.toUpperCase()}</Text>
-                  <Text dimColor>{'  ' + shown.filter(a => groupOf(a) === g).length}</Text>
+                  {/* The session count on a soft fill, like the tool counts: marked out, but not a button. */}
+                  {web
+                    ? <Text bold backgroundColor="#8a90a026">{' ' + shown.filter(a => groupOf(a) === g).length + ' '}</Text>
+                    : <Text dimColor>{' ' + shown.filter(a => groupOf(a) === g).length}</Text>}
                 </Box>,
                 ...rows(shown.filter(a => groupOf(a) === g)),
               ])}
