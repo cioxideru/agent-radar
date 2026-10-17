@@ -246,8 +246,9 @@ const SOFT: Record<string, string> = { claude: '#a98bf026', codex: '#3cc4ae26', 
 // Boxes have no corner radius of their own: a round border in the fill's own color draws the fill with rounded corners.
 const BAR = '#8a90a01a'
 const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
-// The most agents a project header draws as one square each.
+// The most agents a project header draws as one mark each, and each family's mark there.
 const CUBES = 8
+const MARK = { claude: '✻', codex: '◆' }
 // Launchers drawn as their app: icon (graphical surfaces) and the logo's color.
 const APPS: Record<string, { app: string; color: string; short: string }> = {
   'Claude Desktop': { app: 'claude', color: '#D97757', short: 'Claude' },
@@ -515,19 +516,19 @@ export const register: Register = (on, options) => {
     const effCube = (effort?: string) => (
       <Text size="heading" color={EFF_COLOR[EFF.indexOf(effort ?? '')] ?? C.muted}>{effort ? '■' : '—'}</Text>
     )
-    // A project's agents as squares next to its name: running Claude and Codex in their colors, the rest gray.
-    // Past CUBES squares each color collapses into one square and its count in bold.
+    // A project's agents as their family's mark next to its name (squares mean effort): running ones in the family's
+    // color, the rest gray. Past CUBES marks each kind collapses into one mark and its count in bold.
     const groupCubes = (list: Agent[]) => {
+      const count = (f: Agent['family'], live: boolean) => list.filter(a => a.family === f && (a.status === 'running') === live).length
       const parts = ([
-        [list.filter(a => a.status === 'running' && a.family === 'claude').length, C.claude],
-        [list.filter(a => a.status === 'running' && a.family === 'codex').length, C.codex],
-        [list.filter(a => a.status !== 'running').length, C.muted],
+        [count('claude', true), MARK.claude, C.claude], [count('codex', true), MARK.codex, C.codex],
+        [count('claude', false), MARK.claude, C.muted], [count('codex', false), MARK.codex, C.muted],
       ] as const).filter(([n]) => n > 0)
       const many = list.length > CUBES
       return (
         <Text>
-          {parts.map(([n, color]) => (
-            <Text key={'q' + color} color={color}>{many ? '■' : '■'.repeat(n)}{many && <Text bold>{n + ' '}</Text>}</Text>
+          {parts.map(([n, mark, color]) => (
+            <Text key={'q' + mark + color} color={color}>{many ? mark : mark.repeat(n)}{many && <Text bold>{n + ' '}</Text>}</Text>
           ))}
         </Text>
       )
