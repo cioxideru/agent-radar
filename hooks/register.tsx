@@ -278,9 +278,14 @@ async function openPane($: $) {
 // Whether the pane is wanted, shared by every chat through the store: opened or closed by hand in one, the others follow
 // on their next poll. Never set means wanted, so a first session opens it.
 const wanted = async ($: $) => (await $.store.get('open')) !== false
+// The wanted state this chat last acted on: only a change made in another chat opens or closes the pane here, so a
+// pane put up some other way stays, and a session with no surface does not retry its open on every poll.
+let synced: boolean | undefined
 async function syncPane($: $) {
-  const up = (await $.ui.panes()).some(p => p.id === PANE)
   const want = await wanted($)
+  if (want === synced) return
+  synced = want
+  const up = (await $.ui.panes()).some(p => p.id === PANE)
   if (want && !up) await openPane($)
   if (!want && up) await $.ui.close({ id: PANE })
 }
@@ -288,15 +293,16 @@ async function syncPane($: $) {
 export const register: Register = (on, options) => {
   t = STRINGS[(options.language as Lang) in STRINGS ? (options.language as Lang) : 'en']
   on('session.start', async ($, e, next) => {
-    // First, before the slower setup below, so the pane shows up with the session instead of after it.
-    if (await wanted($)) void openPane($)
     root = await $.session.cwd()
-    os = (await $.env.get('OS')) === 'Windows_NT' ? 'win'
-      : (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Linux' ? 'linux' : 'mac'
     home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
     sessionId = await $.session.id()
     const now = Date.now()
     await upsert($, 'main', { project: projectOf(root) }, { ...blank('main', now), title: t.mainSession, how: t.claudeSession, status: 'idle', cwd: root, sid: sessionId, journal: journalOf(root, sessionId) })
+    // Right after the session's own row exists (its first draw is not an empty list) and before the slower setup below.
+    synced = await wanted($)
+    if (synced) void openPane($)
+    os = (await $.env.get('OS')) === 'Windows_NT' ? 'win'
+      : (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Linux' ? 'linux' : 'mac'
     await $.command.register({ name: 'agent-radar', description: t.cmdDescription })
     if (os === 'mac') void loadIcons($)
     $.clock.every(3000, () => {

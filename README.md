@@ -58,7 +58,7 @@ claude plugin marketplace add cioxideru/agent-radar
 claude plugin install agent-radar@agent-radar --scope user
 ```
 
-The pane opens by itself when a session starts; `/agent-radar` reopens it.
+The pane opens by itself when a session starts, and opening or closing it by hand in one chat does the same in the others within a few seconds. After you close it, new sessions start without it until `/agent-radar` opens it again.
 
 ### Update and remove
 
