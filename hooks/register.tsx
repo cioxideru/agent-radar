@@ -274,7 +274,7 @@ async function loadIcons($: $) {
   }
 }
 // `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
-const W = { model: 11, modelShort: 9, cmodel: 11, eff: 6, effShort: 3, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
+const W = { model: 11, modelShort: 9, cmodel: 11, eff: 6, effShort: 2, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
 
 
 // The pane opens with this session's details showing, as if its row had been pressed.
