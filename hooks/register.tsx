@@ -549,10 +549,11 @@ export const register: Register = (on, options) => {
       if (n <= 0) return false
       const folded = collapsed.has(a.id)
       const btn = (
-        <Button key={'v' + a.id.slice(-48)} plain onPress={() => void update($, viewA, v => ({
+        <Button key={'v' + a.id.slice(-48)} label={folded ? '▸' : '▾'} plain onPress={() => void update($, viewA, v => ({
           ...v, collapsed: folded ? (v.collapsed ?? []).filter(x => x !== a.id) : [...(v.collapsed ?? []), a.id],
         }))}>
-          {Svg ? '\u2007\u2007' : <Text bold color={C.muted}>{folded ? 'ᐳ' : 'ᐯ'}</Text>}
+          {/* Over the drawing, invisible glyphs give the button the chevron's width: spaces alone are trimmed away. */}
+          {Svg ? <Text color="#00000000">{'ᐯᐯ'}</Text> : <Text bold color={C.muted}>{folded ? 'ᐳ' : 'ᐯ'}</Text>}
           {folded ? <Text bold color={C.fresh}>{(Svg ? '' : ' ') + n}</Text> : ''}
           {' '}
         </Button>
