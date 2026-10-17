@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Stats, View } from '../types'
-import { chevron, chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from './charts'
+import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
@@ -542,32 +542,20 @@ export const register: Register = (on, options) => {
       })
     }
     // Fold toggle on a root row with children: a chevron, down when open and right when folded with the number of
-    // agents under it in its own color. Graphical surfaces draw the chevron as an image under a button whose label
-    // keeps its room blank (a Button holds only text, and the image comes first so the button paints, and is
-    // pressed, over it); hovering lights the box and swaps in a brighter chevron. The terminal writes ᐯ / ᐳ.
+    // agents under it in its own color. A text glyph inside the button, so the whole chevron takes the click.
     const foldBtn = (a: Agent, n: number) => {
       if (n <= 0) return false
       const folded = collapsed.has(a.id)
-      const btn = (
-        <Button key={'v' + a.id.slice(-48)} label={folded ? '▸' : '▾'} plain onPress={() => void update($, viewA, v => ({
+      // Desktop: ⌄ and › at heading size; the terminal keeps the wider ᐯ and ᐳ, which line up in its cells.
+      return (
+        <Button key={'v' + a.id.slice(-48)} plain onPress={() => void update($, viewA, v => ({
           ...v, collapsed: folded ? (v.collapsed ?? []).filter(x => x !== a.id) : [...(v.collapsed ?? []), a.id],
         }))}>
-          {/* Over the drawing, invisible glyphs give the button the chevron's width: spaces alone are trimmed away. */}
-          {Svg ? <Text color="#00000000">{'ᐯᐯ'}</Text> : <Text bold color={C.muted}>{folded ? 'ᐳ' : 'ᐯ'}</Text>}
-          {folded ? <Text bold color={C.fresh}>{(Svg ? '' : ' ') + n}</Text> : ''}
+          <Text bold size={Svg ? 'heading' : undefined} color={C.muted}>{Svg ? (folded ? '›' : '⌄') : (folded ? 'ᐳ' : 'ᐯ')}</Text>
+          {folded ? <Text bold color={C.fresh}>{' ' + n}</Text> : ''}
           {' '}
         </Button>
       )
-      return Svg ? (
-        <Box key={'vb' + a.id.slice(-48)} position="relative" flexDirection="row" alignItems="center" hover={{ backgroundColor: '#8a90a033', scope: 'fold' + a.id.slice(-48) }}>
-          <Box position="absolute" top={0} left={0}><Svg source={chevron(!folded, C.muted!)} alt={folded ? '▸' : '▾'} width={16} height={20} /></Box>
-          <Box position="absolute" top={0} left={0} display="none" hover={{ display: 'flex', scope: 'fold' + a.id.slice(-48) }}>
-            <Svg source={chevron(!folded, C.fresh!)} alt="" width={16} height={20} />
-          </Box>
-          {/* Positioned and last, so it paints above the absolute chevrons and takes the click. */}
-          <Box position="relative">{btn}</Box>
-        </Box>
-      ) : btn
     }
     const row = (a: Agent, guide: string, fold?: ReturnType<typeof foldBtn>) => {
       const k = a.id.slice(-48)
