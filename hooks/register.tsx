@@ -246,6 +246,7 @@ const SOFT: Record<string, string> = { claude: '#a98bf026', codex: '#3cc4ae26', 
 // Boxes have no corner radius of their own: a round border in the fill's own color draws the fill with rounded corners.
 const BAR = '#8a90a01a'
 const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
+const CHIP = '#8a90a026'
 // Launchers drawn as their app: icon (graphical surfaces) and the logo's color.
 const APPS: Record<string, { app: string; color: string; short: string }> = {
   'Claude Desktop': { app: 'claude', color: '#D97757', short: 'Claude' },
@@ -894,9 +895,9 @@ export const register: Register = (on, options) => {
             : projects.flatMap(([g, p]) => [
                 <Box key={'p' + p} flexDirection="row" gap={1} alignItems="center" paddingX={1} marginTop={1}>
                   <Text color={C.muted} bold>{p.toUpperCase()}</Text>
-                  {/* The session count on a soft fill, like the tool counts: marked out, but not a button. */}
+                  {/* The session count on a soft rounded fill (a round border in the fill's color): marked out, but not a button. */}
                   {web
-                    ? <Text bold backgroundColor="#8a90a026">{' ' + shown.filter(a => groupOf(a) === g).length + ' '}</Text>
+                    ? <Box backgroundColor={CHIP} borderStyle="round" borderColor={CHIP} paddingX={1}><Text bold>{String(shown.filter(a => groupOf(a) === g).length)}</Text></Box>
                     : <Text dimColor>{' ' + shown.filter(a => groupOf(a) === g).length}</Text>}
                 </Box>,
                 ...rows(shown.filter(a => groupOf(a) === g)),
