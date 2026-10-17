@@ -48,6 +48,12 @@ export const CODEX_MARK =
   '<g fill="url(#cx)"><circle cx="8" cy="8" r="5.6"/><circle cx="8.00" cy="3.60" r="3.4"/><circle cx="11.44" cy="5.26" r="3.4"/><circle cx="12.29" cy="8.98" r="3.4"/><circle cx="9.91" cy="11.96" r="3.4"/><circle cx="6.09" cy="11.96" r="3.4"/><circle cx="3.71" cy="8.98" r="3.4"/><circle cx="4.56" cy="5.26" r="3.4"/></g>' +
   '<path d="M5 5.6 L7.6 8 L5 10.4 M8.9 10.5 H11.4" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>'
 
+// Our own small Claude mark on the same 16-unit square: the app's orange tile with a white spark of eight rays,
+// long and short in turn, which stays legible where the app's own icon blurs.
+export const CLAUDE_MARK =
+  '<rect width="16" height="16" rx="4.5" fill="#D97757"/>' +
+  '<path d="M9.85 8.77 L13.54 10.30 M8.77 9.85 L9.91 12.62 M7.23 9.85 L5.70 13.54 M6.15 8.77 L3.38 9.91 M6.15 7.23 L2.46 5.70 M7.23 6.15 L6.09 3.38 M8.77 6.15 L10.30 2.46 M9.85 7.23 L12.62 6.09" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/>'
+
 // A low pill on a gray rounded track: an optional icon first (an image URL, or SVG markup on a 16-unit square),
 // then one square per item in its color, or each group's count as bold digits.
 export function chip(parts: { n: number; color: string }[], asCounts: boolean, icon?: string, h = 16) {

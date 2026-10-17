@@ -7,7 +7,7 @@ A live pane for [Claude Code](https://code.claude.com) that shows every agent wo
 ![Agent Radar pane](docs/screenshots/pane.png)
 
 > [!NOTE]
-> Agent Radar is a Claude Code **mod** — a plugin built on Claude Code's function-hooks technology (`hooks/register.tsx`, drawn through `ui.render` into a Pane). It is built and tested on **macOS**. **Linux and Windows** are supported but not yet tested on real machines: the pane and both scopes work the same; app icons are not shown, *CLI* copies the resume command instead of opening Terminal, and on Linux there is no Claude Desktop, so *open chat* and *handoff* are absent.
+> Agent Radar is a Claude Code **mod** — a plugin built on Claude Code's function-hooks technology (`hooks/register.tsx`, drawn through `ui.render` into a Pane). It is built and tested on **macOS**. **Linux and Windows** are supported but not yet tested on real machines: the pane and both scopes work the same; *CLI* copies the resume command instead of opening Terminal, and on Linux there is no Claude Desktop, so *open chat* and *handoff* are absent.
 
 > Screenshots show fictional projects and numbers.
 
@@ -111,7 +111,7 @@ There is no server and no network access. The mod runs inside Claude Code and re
 | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `~/.codex/session_index.jsonl` | Codex runs: model, effort, tokens, context, rate limits, titles |
 | `~/Library/Application Support/Claude/claude-code-sessions` (`%APPDATA%\Claude` on Windows) | which sessions belong to Claude Desktop, for the *open chat* link |
 
-A small Python scanner (`scan.py`, embedded in `hooks/scan.ts`) reads the journals every 3 s for this project and every 10 s for all sessions. On macOS, app icons are read from the installed apps at runtime and are not shipped with the mod.
+A small Python scanner (`scan.py`, embedded in `hooks/scan.ts`) reads the journals every 3 s for this project and every 10 s for all sessions.
 
 ## Development
 

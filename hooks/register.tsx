@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Stats, View } from '../types'
-import { chip, CODEX_MARK, meter, sparkline, stackBar } from './charts'
+import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
@@ -39,11 +39,11 @@ const HOW: Record<string, string> = {
 let root = ''
 // The pane's texts, picked by the `language` option when the module loads.
 let t: Strings = STRINGS.en
-// Launcher icons: Claude's read from the installed app at session start (until then, or without it, colored text).
-// Codex uses our own drawn mark everywhere: the app's icon files carry a plate that reads as a blob at row size.
-const ICONS: Record<string, string> = { codex: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${CODEX_MARK}</svg>` }
-// The same icons as PNG data URLs, to place inside other drawings (the project header pills).
-const ICON_PNG: Record<string, string> = {}
+// Launcher icons: our own drawn marks for Claude and Codex, the same in the rows and the project pills. The apps'
+// icon files blur or turn into a plate at 10-16 px, and drawn marks need no app installed, on any system.
+const MARK: Record<'claude' | 'codex', string> = { claude: CLAUDE_MARK, codex: CODEX_MARK }
+const ICONS: Record<string, string> = Object.fromEntries(Object.entries(MARK).map(([k, m]) =>
+  [k, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${m}</svg>`]))
 let home = ''
 // The system this runs on, read at session start; macOS has the app icons, Claude Desktop links and Terminal.
 let os: 'mac' | 'linux' | 'win' = 'mac'
@@ -260,19 +260,6 @@ const APPS: Record<string, { app: string; color: string; short: string }> = {
   'Claude Code CLI': { app: 'claude', color: '#D97757', short: 'CLI' },
   'Codex Desktop': { app: 'codex', color: '#8B8CF8', short: 'Codex' },
 }
-const APP_ICON_FILES: Record<string, string> = {
-  claude: '/Applications/Claude.app/Contents/Resources/electron.icns',
-}
-// Each icon converted to a 32px PNG by macOS `sips` and wrapped as an SVG source for the Svg element.
-async function loadIcons($: $) {
-  for (const [app, file] of Object.entries(APP_ICON_FILES)) {
-    if (ICONS[app]) continue
-    const r = await $.process.run(['sh', '-c', 't=$(mktemp -t agent-radar).png; sips -s format png -Z 32 "$1" --out "$t" >/dev/null 2>&1 && base64 -i "$t"; rm -f "$t"', 'sh', file], { timeoutMs: 5000 }).catch(() => undefined)
-    const b64 = r?.exitCode === 0 ? r.stdout.replace(/\s/g, '') : ''
-    if (b64) ICON_PNG[app] = 'data:image/png;base64,' + b64
-    if (b64) ICONS[app] = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><image width="32" height="32" href="data:image/png;base64,${b64}"/></svg>`
-  }
-}
 // `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
 const W = { model: 11, modelShort: 9, cmodel: 11, eff: 6, effShort: 2, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
 
@@ -312,7 +299,6 @@ export const register: Register = (on, options) => {
     os = (await $.env.get('OS')) === 'Windows_NT' ? 'win'
       : (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Linux' ? 'linux' : 'mac'
     await $.command.register({ name: 'agent-radar', description: t.cmdDescription })
-    if (os === 'mac') void loadIcons($)
     $.clock.every(3000, () => {
       void syncPane($).catch(() => {})
       if (polling) return
@@ -544,7 +530,7 @@ export const register: Register = (on, options) => {
         const color = BAR_COLOR[f]
         // Graphical surfaces: a rounded gray pill drawn as an image; the terminal: plain colored text.
         if (Svg) {
-          const c = chip([{ n: live, color }, { n: rest, color: C.muted! }], counts, f === 'codex' ? CODEX_MARK : ICON_PNG[f])
+          const c = chip([{ n: live, color }, { n: rest, color: C.muted! }], counts, MARK[f])
           return <Svg key={'q-' + f} source={c.source} alt={`${f} ${live}/${mine.length}`} width={c.w} height={c.h} />
         }
         return counts
