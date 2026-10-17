@@ -544,7 +544,7 @@ export const register: Register = (on, options) => {
     // Fold toggle on a root row with children: a chevron, down when open and right when folded with the number of
     // agents under it in its own color. Graphical surfaces draw the chevron as an image under a button whose label
     // keeps its room blank (a Button holds only text, and the image comes first so the button paints, and is
-    // pressed, over it); the terminal writes ᐯ / ᐳ.
+    // pressed, over it); hovering lights the box and swaps in a brighter chevron. The terminal writes ᐯ / ᐳ.
     const foldBtn = (a: Agent, n: number) => {
       if (n <= 0) return false
       const folded = collapsed.has(a.id)
@@ -552,14 +552,17 @@ export const register: Register = (on, options) => {
         <Button key={'v' + a.id.slice(-48)} plain onPress={() => void update($, viewA, v => ({
           ...v, collapsed: folded ? (v.collapsed ?? []).filter(x => x !== a.id) : [...(v.collapsed ?? []), a.id],
         }))}>
-          {Svg ? '   ' : <Text bold color={C.muted}>{folded ? 'ᐳ' : 'ᐯ'}</Text>}
+          {Svg ? '\u2007\u2007' : <Text bold color={C.muted}>{folded ? 'ᐳ' : 'ᐯ'}</Text>}
           {folded ? <Text bold color={C.fresh}>{(Svg ? '' : ' ') + n}</Text> : ''}
           {' '}
         </Button>
       )
       return Svg ? (
-        <Box key={'vb' + a.id.slice(-48)} position="relative" flexDirection="row" alignItems="center">
-          <Box position="absolute" top={0} left={0}><Svg source={chevron(!folded, C.muted!)} alt={folded ? '▸' : '▾'} width={12} height={18} /></Box>
+        <Box key={'vb' + a.id.slice(-48)} position="relative" flexDirection="row" alignItems="center" hover={{ backgroundColor: '#8a90a033', scope: 'fold' + a.id.slice(-48) }}>
+          <Box position="absolute" top={0} left={0}><Svg source={chevron(!folded, C.muted!)} alt={folded ? '▸' : '▾'} width={16} height={20} /></Box>
+          <Box position="absolute" top={0} left={0} display="none" hover={{ display: 'flex', scope: 'fold' + a.id.slice(-48) }}>
+            <Svg source={chevron(!folded, C.fresh!)} alt="" width={16} height={20} />
+          </Box>
           {btn}
         </Box>
       ) : btn
