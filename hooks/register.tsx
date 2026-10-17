@@ -74,6 +74,9 @@ export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 export const asq = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
 export const projectOf = (cwd = '') => cwd.replace(/[\\/]\.(claude|codex)[\\/]worktrees[\\/].*$/, '').split(/[\\/]/).pop() || cwd
+// A model as the rows show it: Codex's own models without the repeated "codex-" (codex-auto-review → auto-review), so
+// the narrow model column is not spent on an ellipsis. The details keep the full name.
+export const modelLabel = (m = '') => m.replace(/^codex-/, '')
 // Without the tenth of a million, for the narrowed token column.
 export const fmtKShort = (n: number) => (n >= 1e6 ? Math.round(n / 1e6) + 'M' : fmtK(n))
 export const fmtK = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n))
@@ -271,7 +274,7 @@ async function loadIcons($: $) {
   }
 }
 // `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
-const W = { model: 12, modelShort: 10, cmodel: 12, eff: 6, effShort: 3, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
+const W = { model: 11, modelShort: 9, cmodel: 11, eff: 6, effShort: 3, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
 
 
 // The pane opens with this session's details showing, as if its row had been pressed.
@@ -426,7 +429,7 @@ export const register: Register = (on, options) => {
     const web = e.surface !== 'terminal'
     // Narrowing steps: the launch column goes first, then effort shrinks to one square under a short header, and only
     // then do rows become two-line cards.
-    const compact = cols < 64, tight = cols < 88, showHow = cols >= 96, showEff = true
+    const compact = cols < 56, tight = cols < 88, showHow = cols >= 96, showEff = true
     const effW = tight ? W.effShort : W.eff, modelW = tight ? W.modelShort : W.model
     // Token column: count over a bar (desktop), count beside a bar (terminal); narrowed with the effort column.
     const barW = web ? (tight ? W.bar : W.bar + 2) : W.bar, numW = tight ? 4 : W.tok
@@ -578,7 +581,7 @@ export const register: Register = (on, options) => {
             {a.open && <Box flexShrink={0}>{openBtn(a)}</Box>}
           </Box>
           <Box width={modelW} flexShrink={0} overflow="hidden">
-            <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (a.model || '…') + ' '}</Text>
+            <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (modelLabel(a.model) || '…') + ' '}</Text>
           </Box>
           {showEff && (
             <Box width={effW} flexShrink={0} overflow="hidden">
@@ -645,7 +648,7 @@ export const register: Register = (on, options) => {
             {pad > 0 && <Box width={pad} flexShrink={0}><Text color={C.muted}>{cont}</Text></Box>}
             <Box width={2} flexShrink={0} />
             <Box width={W.cmodel} flexShrink={0} overflow="hidden">
-              <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (a.model || '…') + ' '}</Text>
+              <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (modelLabel(a.model) || '…') + ' '}</Text>
             </Box>
             {cardEffLong
               ? <Box width={W.eff} flexShrink={0} alignItems="center">{effText(a.effort)}</Box>

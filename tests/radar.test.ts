@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { chip, CODEX_MARK, meter, sparkline, stackBar } from '../hooks/charts'
 
-import { asq, ctxColor, fmtT, fromScan, handoffUrl, ordered, parseCodex, projectOf, shq } from '../hooks/register'
+import { asq, ctxColor, fmtT, fromScan, handoffUrl, modelLabel, ordered, parseCodex, projectOf, shq } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -15,6 +15,8 @@ test('maps worktrees to their project', () => {
   expect(projectOf('/a/orbit-shop/.claude/worktrees/x/y')).toBe('orbit-shop')
   expect(projectOf('/a/orbit-shop')).toBe('orbit-shop')
   expect(projectOf('C:\\dev\\orbit-shop\\.codex\\worktrees\\x')).toBe('orbit-shop')
+  expect(modelLabel('codex-auto-review')).toBe('auto-review')
+  expect(modelLabel('opus-5-5')).toBe('opus-5-5')
 })
 
 test('builds a tree from a disk scan: subagent under its session, codex done', () => {
