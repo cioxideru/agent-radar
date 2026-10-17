@@ -110,4 +110,4 @@ claude --plugin-dir ./agent-radar
 
 ## Лицензия
 
-[MIT](LICENSE). Проект не связан с Anthropic и OpenAI; Claude и Codex — товарные знаки их владельцев.
+[Apache-2.0](LICENSE). Проект не связан с Anthropic и OpenAI; Claude и Codex — товарные знаки их владельцев.

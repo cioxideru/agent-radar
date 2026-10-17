@@ -123,4 +123,4 @@ claude --plugin-dir ~/path/to/agent-radar
 
 ## License
 
-[MIT](LICENSE). Not affiliated with Anthropic or OpenAI; Claude and Codex are trademarks of their owners.
+[Apache-2.0](LICENSE). Not affiliated with Anthropic or OpenAI; Claude and Codex are trademarks of their owners.
