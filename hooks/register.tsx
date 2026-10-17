@@ -546,12 +546,14 @@ export const register: Register = (on, options) => {
     const foldBtn = (a: Agent, n: number) => {
       if (n <= 0) return false
       const folded = collapsed.has(a.id)
-      // Desktop: ⌄ and › at heading size; the terminal keeps the wider ᐯ and ᐳ, which line up in its cells.
+      // Desktop: thin ⌵ and ⟩ at heading size, the glyphs closest to the app's own chevron; the terminal keeps
+      // the wider ᐯ and ᐳ, which line up in its cells.
       return (
         <Button key={'v' + a.id.slice(-48)} plain onPress={() => void update($, viewA, v => ({
           ...v, collapsed: folded ? (v.collapsed ?? []).filter(x => x !== a.id) : [...(v.collapsed ?? []), a.id],
         }))}>
-          <Text bold size={Svg ? 'heading' : undefined} color={C.muted}>{Svg ? (folded ? '›' : '⌄') : (folded ? 'ᐳ' : 'ᐯ')}</Text>
+          {Svg ? <Text size="heading" color={C.muted}>{folded ? '⟩' : '⌵'}</Text>
+            : <Text bold color={C.muted}>{folded ? 'ᐳ' : 'ᐯ'}</Text>}
           {folded ? <Text bold color={C.fresh}>{' ' + n}</Text> : ''}
           {' '}
         </Button>
