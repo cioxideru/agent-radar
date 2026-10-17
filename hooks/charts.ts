@@ -40,26 +40,27 @@ export function sparkline(series: number[], color: string, w = 360, h = 40) {
   )
 }
 
-// Our own small Codex mark on a 16-unit square: the app's blue-violet disc with a white prompt. The app's icon
+// Our own small Codex mark on a 16-unit square: the app's blue-violet cloud (a disc ringed by seven round lobes) and a
+// white prompt. The app's icon
 // files carry a solid plate that turns into a dark or white blob at 10 px.
 export const CODEX_MARK =
-  '<defs><linearGradient id="cx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b58cff"/><stop offset="1" stop-color="#3d5afe"/></linearGradient></defs>' +
-  '<circle cx="8" cy="8" r="8" fill="url(#cx)"/>' +
-  '<path d="M4.6 5.2 L7.6 8 L4.6 10.8 M9 10.9 H12" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>'
+  '<defs><linearGradient id="cx" gradientUnits="userSpaceOnUse" x1="0" y1="1" x2="0" y2="15"><stop offset="0" stop-color="#b58cff"/><stop offset="1" stop-color="#3d5afe"/></linearGradient></defs>' +
+  '<g fill="url(#cx)"><circle cx="8" cy="8" r="5.6"/><circle cx="8.00" cy="3.60" r="3.4"/><circle cx="11.44" cy="5.26" r="3.4"/><circle cx="12.29" cy="8.98" r="3.4"/><circle cx="9.91" cy="11.96" r="3.4"/><circle cx="6.09" cy="11.96" r="3.4"/><circle cx="3.71" cy="8.98" r="3.4"/><circle cx="4.56" cy="5.26" r="3.4"/></g>' +
+  '<path d="M5 5.6 L7.6 8 L5 10.4 M8.9 10.5 H11.4" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>'
 
 // A low pill on a gray rounded track: an optional icon first (an image URL, or SVG markup on a 16-unit square),
 // then one square per item in its color, or each group's count as bold digits.
-export function chip(parts: { n: number; color: string }[], asCounts: boolean, icon?: string, h = 14) {
-  const pad = 5, sq = 8, gap = 2, digit = 7, space = 5, ic = h - 4
-  let x = icon ? 3 : pad
+export function chip(parts: { n: number; color: string }[], asCounts: boolean, icon?: string, h = 16) {
+  const pad = 6, sq = 9, gap = 2, digit = 7.5, space = 5, ic = h - 3
+  let x = icon ? 2 : pad
   const head = !icon ? ''
-    : icon.startsWith('<') ? `<svg x="${x}" y="2" width="${ic}" height="${ic}" viewBox="0 0 16 16">${icon}</svg>`
-    : `<image x="${x}" y="2" width="${ic}" height="${ic}" href="${icon}"/>`
+    : icon.startsWith('<') ? `<svg x="${x}" y="${(h - ic) / 2}" width="${ic}" height="${ic}" viewBox="0 0 16 16">${icon}</svg>`
+    : `<image x="${x}" y="${(h - ic) / 2}" width="${ic}" height="${ic}" href="${icon}"/>`
   if (icon) x += ic + 3
   const marks = parts.filter(p => p.n > 0).map(p => {
     if (asCounts) {
       const s = String(p.n)
-      const t = `<text x="${x}" y="${h - 3.5}" font-family="-apple-system,system-ui,sans-serif" font-size="11" font-weight="700" fill="${p.color}">${s}</text>`
+      const t = `<text x="${x}" y="${h - 4}" font-family="-apple-system,system-ui,sans-serif" font-size="12" font-weight="700" fill="${p.color}">${s}</text>`
       x += s.length * digit + space
       return t
     }
