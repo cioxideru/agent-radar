@@ -455,13 +455,16 @@ export const register: Register = (on, options) => {
         <Box flexGrow={1} flexShrink={1} minWidth={0}><Text dimColor bold>{t.head.task}</Text></Box>
         <Box width={modelW} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.model}</Text></Box>
         {showEff && <Box width={effW} flexShrink={0} overflow="hidden"><Text dimColor bold>{tight ? t.head.effortShort : t.head.effort}</Text></Box>}
-        <Box width={web ? barW : numW + 1 + barW} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text dimColor bold>{tight ? t.head.tokensShort : t.head.tokens}</Text></Box>
-        <Box width={W.ctx} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text dimColor bold>{t.head.ctx}</Text></Box>
+        <Box width={web ? barW : numW + 1 + barW} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{tight ? t.head.tokensShort : t.head.tokens}</Text></Box>
+        <Box width={W.ctx} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{t.head.ctx}</Text></Box>
         <Box width={W.time} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text dimColor bold>{t.head.time}</Text></Box>
         {showHow && <Box width={W.how} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.how}</Text></Box>}
       </Box>
     )
 
+    // A 3 px bar stretched across its cell, so the number above sits close and the row stays one line plus a hair.
+    const thinBar = (share: number, color: string) =>
+      Svg && <Svg source={meter(share, color, 360, 4).replace('<svg ', '<svg preserveAspectRatio="none" ')} alt={Math.round(share * 100) + '%'} height={3} />
     // Share of the context window in use: the percent over a bar, colored by how full it is.
     const ctxCell = (a: Agent) => {
       const s = ctxOf(a)
@@ -469,12 +472,14 @@ export const register: Register = (on, options) => {
       const color = s === undefined ? C.muted : ctxColor(s)
       const fill = s === undefined ? 0 : Math.max(1, Math.round(s * W.ctx))
       return web ? (
-        <Box key={'x' + a.id.slice(-40)} width={W.ctx} flexShrink={0} flexDirection="column" alignItems="flex-end">
+        <Box key={'x' + a.id.slice(-40)} width={W.ctx} flexShrink={0} flexDirection="column" alignItems="center">
           <Text mono size="footnote" color={color}>{pct}</Text>
-          <Box width={W.ctx} flexShrink={0} overflow="hidden">
-            <Text mono color={color}>{'━'.repeat(fill)}</Text>
-            <Text mono color={C.muted} dimColor>{'━'.repeat(W.ctx - fill)}</Text>
-          </Box>
+          {Svg
+            ? <Box width={W.ctx} flexShrink={0}>{thinBar(s ?? 0, color!)}</Box>
+            : <Box width={W.ctx} flexShrink={0} overflow="hidden">
+                <Text mono color={color}>{'━'.repeat(fill)}</Text>
+                <Text mono color={C.muted} dimColor>{'━'.repeat(W.ctx - fill)}</Text>
+              </Box>}
         </Box>
       ) : (
         <Box key={'x' + a.id.slice(-40)} width={W.ctx} flexShrink={0} justifyContent="flex-end"><Text color={color}>{pct}</Text></Box>
@@ -485,12 +490,14 @@ export const register: Register = (on, options) => {
       const t = a.tokIn + a.tokOut
       const filled = Math.max(t ? 1 : 0, Math.round((t / maxTok) * barW))
       return web ? (
-        <Box key={'k' + a.id.slice(-40)} width={barW} flexShrink={0} flexDirection="column" alignItems="flex-end">
+        <Box key={'k' + a.id.slice(-40)} width={barW} flexShrink={0} flexDirection="column" alignItems="center">
           <Text mono size="footnote">{fmtTok(t)}</Text>
-          <Box width={barW} flexShrink={0} overflow="hidden">
-            <Text mono color={C[a.family]}>{'━'.repeat(filled)}</Text>
-            <Text mono color={C.muted} dimColor>{'━'.repeat(barW - filled)}</Text>
-          </Box>
+          {Svg
+            ? <Box width={barW} flexShrink={0}>{thinBar(t / maxTok, C[a.family]!)}</Box>
+            : <Box width={barW} flexShrink={0} overflow="hidden">
+                <Text mono color={C[a.family]}>{'━'.repeat(filled)}</Text>
+                <Text mono color={C.muted} dimColor>{'━'.repeat(barW - filled)}</Text>
+              </Box>}
         </Box>
       ) : (
         <Box key={'k' + a.id.slice(-40)} flexDirection="row" gap={1} flexShrink={0}>
