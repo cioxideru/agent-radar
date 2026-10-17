@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { meter, sparkline, stackBar } from '../hooks/charts'
+import { chip, meter, sparkline, stackBar } from '../hooks/charts'
 
 import { asq, ctxColor, fmtT, fromScan, handoffUrl, ordered, parseCodex, projectOf, shq } from '../hooks/register'
 
@@ -65,6 +65,8 @@ test('charts draw sized SVG documents', () => {
   expect(stackBar([{ v: 0, color: '#222' }])).not.toContain('#222')
   expect(meter(0.5, '#0f0')).toContain('width="180.0"')
   expect(sparkline([0, 5, 2], '#0f0')).toContain('<circle')
+  expect(chip([{ n: 2, color: '#f00' }, { n: 1, color: '#999' }], false).source.match(/<rect/g)).toHaveLength(4)
+  expect(chip([{ n: 12, color: '#f00' }, { n: 0, color: '#999' }], true).source).toContain('>12</text>')
 })
 
 test('context colors follow the fill thresholds and handoff links carry folder and journal', () => {

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Stats, View } from '../types'
-import { meter, sparkline, stackBar } from './charts'
+import { chip, meter, sparkline, stackBar } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
@@ -522,9 +522,9 @@ export const register: Register = (on, options) => {
     const effCube = (effort?: string) => (
       <Text size="heading" color={EFF_COLOR[EFF.indexOf(effort ?? '')] ?? C.muted}>{effort ? '■' : '—'}</Text>
     )
-    // A project's agents as one low bar per family next to its name (left out when the family has none there):
+    // A project's agents as one low pill per family next to its name (left out when the family has none there):
     // a square per agent, running in the family's color, the rest gray. When the squares would not fit on the
-    // header line, each bar holds two bold numbers instead: running in color, then the others in gray.
+    // header line, each pill holds two bold numbers instead: running in color, then the others in gray.
     const groupCubes = (list: Agent[], name: string) => {
       const fams = (['claude', 'codex'] as const).filter(f => list.some(a => a.family === f))
       // Name, its gap, and per bar its squares, two padding spaces and a gap; the pane's padding on both sides.
@@ -533,13 +533,14 @@ export const register: Register = (on, options) => {
         const mine = list.filter(a => a.family === f)
         const live = mine.filter(a => a.status === 'running').length, rest = mine.length - live
         const color = BAR_COLOR[f]
-        return (
-          <Text key={'q-' + f} backgroundColor={web ? color + '26' : undefined}>
-            {counts
-              ? <Text bold>{' '}<Text color={color}>{String(live)}</Text>{rest ? <Text color={C.muted}>{' ' + rest}</Text> : ''}{' '}</Text>
-              : <Text>{' '}<Text color={color}>{'■'.repeat(live)}</Text><Text color={C.muted}>{'■'.repeat(rest)}</Text>{' '}</Text>}
-          </Text>
-        )
+        // Graphical surfaces: a rounded gray pill drawn as an image; the terminal: plain colored text.
+        if (Svg) {
+          const c = chip([{ n: live, color }, { n: rest, color: C.muted! }], counts)
+          return <Svg key={'q-' + f} source={c.source} alt={`${f} ${live}/${mine.length}`} width={c.w} height={c.h} />
+        }
+        return counts
+          ? <Text key={'q-' + f} bold><Text color={color}>{String(live)}</Text>{rest ? <Text color={C.muted}>{' ' + rest}</Text> : ''}</Text>
+          : <Text key={'q-' + f}><Text color={color}>{'■'.repeat(live)}</Text><Text color={C.muted}>{'■'.repeat(rest)}</Text></Text>
       })
     }
     // Fold toggle on a root row with children: ▾ open, ▸ folded with the number of agents under it in its own color.
