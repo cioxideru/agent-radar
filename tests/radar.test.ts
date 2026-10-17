@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from '../hooks/charts'
+import { chevron, chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from '../hooks/charts'
 
 import { asq, ctxColor, fmtT, fromScan, handoffUrl, modelLabel, ordered, parseCodex, projectOf, shq } from '../hooks/register'
 
@@ -72,6 +72,7 @@ test('charts draw sized SVG documents', () => {
   expect(chip([{ n: 1, color: '#f00' }], false, 'data:image/png;base64,AA').source).toContain('<image')
   expect(chip([{ n: 1, color: '#f00' }], false, CODEX_MARK).source).toContain('viewBox="0 0 16 16"')
   expect(chip([{ n: 1, color: '#f00' }], false, CLAUDE_MARK).source).toContain('#D97757')
+  expect(chevron(true, '#999')).toContain('M2.5 7')
 })
 
 test('context colors follow the fill thresholds and handoff links carry folder and journal', () => {

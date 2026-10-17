@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Stats, View } from '../types'
-import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from './charts'
+import { chevron, chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
@@ -538,17 +538,29 @@ export const register: Register = (on, options) => {
           : <Text key={'q-' + f}><Text color={color}>{'■'.repeat(live)}</Text><Text color={C.muted}>{'■'.repeat(rest)}</Text></Text>
       })
     }
-    // Fold toggle on a root row with children: a heavy chevron, ᐯ open and ᐳ folded with the number of agents under it in its
-    // own color; body size, so the chevron stands as tall as that number.
-    const foldBtn = (a: Agent, n: number) => n > 0 && (
-      <Button key={'v' + a.id.slice(-48)} plain onPress={() => void update($, viewA, v => ({
-        ...v, collapsed: collapsed.has(a.id) ? (v.collapsed ?? []).filter(x => x !== a.id) : [...(v.collapsed ?? []), a.id],
-      }))}>
-        <Text bold color={C.muted}>{collapsed.has(a.id) ? 'ᐳ' : 'ᐯ'}</Text>
-        {collapsed.has(a.id) ? <Text bold color={C.fresh}>{' ' + n}</Text> : ''}
-        {' '}
-      </Button>
-    )
+    // Fold toggle on a root row with children: a chevron, down when open and right when folded with the number of
+    // agents under it in its own color. Graphical surfaces draw the chevron as an image under a button whose label
+    // keeps its room blank (a Button holds only text, and the image comes first so the button paints, and is
+    // pressed, over it); the terminal writes ᐯ / ᐳ.
+    const foldBtn = (a: Agent, n: number) => {
+      if (n <= 0) return false
+      const folded = collapsed.has(a.id)
+      const btn = (
+        <Button key={'v' + a.id.slice(-48)} plain onPress={() => void update($, viewA, v => ({
+          ...v, collapsed: folded ? (v.collapsed ?? []).filter(x => x !== a.id) : [...(v.collapsed ?? []), a.id],
+        }))}>
+          {Svg ? '   ' : <Text bold color={C.muted}>{folded ? 'ᐳ' : 'ᐯ'}</Text>}
+          {folded ? <Text bold color={C.fresh}>{(Svg ? '' : ' ') + n}</Text> : ''}
+          {' '}
+        </Button>
+      )
+      return Svg ? (
+        <Box key={'vb' + a.id.slice(-48)} position="relative" flexDirection="row" alignItems="center">
+          <Box position="absolute" top={0} left={0}><Svg source={chevron(!folded, C.muted!)} alt={folded ? '▸' : '▾'} width={12} height={18} /></Box>
+          {btn}
+        </Box>
+      ) : btn
+    }
     const row = (a: Agent, guide: string, fold?: ReturnType<typeof foldBtn>) => {
       const k = a.id.slice(-48)
       const isSel = a.id === selId

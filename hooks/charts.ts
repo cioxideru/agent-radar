@@ -48,11 +48,18 @@ export const CODEX_MARK =
   '<g fill="url(#cx)"><circle cx="8" cy="8" r="5.6"/><circle cx="8.00" cy="3.60" r="3.4"/><circle cx="11.44" cy="5.26" r="3.4"/><circle cx="12.29" cy="8.98" r="3.4"/><circle cx="9.91" cy="11.96" r="3.4"/><circle cx="6.09" cy="11.96" r="3.4"/><circle cx="3.71" cy="8.98" r="3.4"/><circle cx="4.56" cy="5.26" r="3.4"/></g>' +
   '<path d="M5 5.6 L7.6 8 L5 10.4 M8.9 10.5 H11.4" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>'
 
-// Our own small Claude mark on the same 16-unit square: the app's orange tile with a white spark of eight rays,
-// long and short in turn, which stays legible where the app's own icon blurs.
+// Our own small Claude mark on the same 16-unit square: the app's terracotta tile and its cream spark, eleven
+// uneven rays that widen toward rounded tips, as in the logo; legible where the app's own icon blurs.
 export const CLAUDE_MARK =
   '<rect width="16" height="16" rx="4.5" fill="#D97757"/>' +
-  '<path d="M9.85 8.77 L13.54 10.30 M8.77 9.85 L9.91 12.62 M7.23 9.85 L5.70 13.54 M6.15 8.77 L3.38 9.91 M6.15 7.23 L2.46 5.70 M7.23 6.15 L6.09 3.38 M8.77 6.15 L10.30 2.46 M9.85 7.23 L12.62 6.09" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/>'
+  '<path d="M8.14 7.08L8.30 2.07A0.82 0.82 0 0 0 6.67 2.21L7.70 7.12ZM8.64 7.33L10.90 4.62A0.82 0.82 0 0 0 9.48 3.80L8.26 7.11ZM8.90 7.77L13.31 6.10A0.82 0.82 0 0 0 12.54 4.66L8.69 7.38ZM8.86 8.34L12.62 9.48A0.82 0.82 0 0 0 12.85 7.85L8.92 7.91ZM8.55 8.75L12.05 12.47A0.82 0.82 0 0 0 13.11 11.22L8.83 8.41ZM8.07 8.92L8.51 12.23A0.82 0.82 0 0 0 10.07 11.72L8.49 8.79ZM7.51 8.79L5.50 13.05A0.82 0.82 0 0 0 7.06 13.56L7.93 8.92ZM7.16 8.38L3.65 10.36A0.82 0.82 0 0 0 4.66 11.65L7.43 8.73ZM7.09 7.84L2.08 7.59A0.82 0.82 0 0 0 2.19 9.23L7.12 8.28ZM7.35 7.34L4.72 4.98A0.82 0.82 0 0 0 3.85 6.37L7.12 7.71ZM7.80 7.09L6.33 2.72A0.82 0.82 0 0 0 4.86 3.43L7.41 7.29Z" fill="#FAF6EF"/><circle cx="8" cy="8" r="1.1" fill="#FAF6EF"/>'
+
+// A bold chevron for the fold toggle, pointing down (open) or right (folded), centered in a 12 × 18 box so it
+// sits on the text line. Drawn because the text chevrons are either thin or hang off the baseline.
+export function chevron(open: boolean, color: string) {
+  const d = open ? 'M2.5 7 L6 10.5 L9.5 7' : 'M4.5 5.5 L8 9 L4.5 12.5'
+  return svg(12, 18, `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`)
+}
 
 // A low pill on a gray rounded track: an optional icon first (an image URL, or SVG markup on a 16-unit square),
 // then one square per item in its color, or each group's count as bold digits.
