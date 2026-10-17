@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 test('pane draws a codex row with its columns on terminal and desktop', async ($, on) => {
   on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
@@ -130,5 +130,19 @@ test('the Claude counter switches Claude agents off and a second press brings th
   expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeDefined()
   await ui.press({ key: claude.key })
   expect(await ui.find({ type: 'Text', text: /Geometry audit/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the All scope reuses a fresh scan another chat left in the store', async ($, on) => {
+  let runs = 0
+  on('process.run', () => { runs++; return { value: { exitCode: 1, stdout: '', stderr: '' } } as never })
+  const now = Date.now()
+  mock.store(on, { allScan: { at: now, mins: 15, s: { codex: [], claude: [
+    { path: '/p/s9.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Shared scan row' },
+  ] } } })
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  await ui.press({ key: 's-all' })
+  expect(await ui.find({ type: 'Text', text: /Shared scan row/ })).toBeDefined()
+  expect(runs).toBe(0)
   await ui.unmount()
 })

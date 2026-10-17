@@ -226,7 +226,13 @@ async function pollAll($: $) {
   const view = await read($, viewA)
   if (view.scope !== 'all') return
   lastAll = Date.now()
-  const s = await scan($, 'all', view.showDone ? 120 : 15, [])
+  const mins = view.showDone ? 120 : 15
+  // Every chat shows the same machine-wide list: a scan another chat made in the last few seconds, for the same
+  // window, is reused from the shared store instead of read from disk again.
+  const kept = (await $.store.get('allScan').catch(() => undefined)) as { at: number; mins: number; s: Scan } | undefined
+  const fresh = kept && kept.mins === mins && Date.now() - kept.at < 9e3
+  const s = fresh ? kept.s : await scan($, 'all', mins, [])
+  if (!fresh) await $.store.set('allScan', { at: Date.now(), mins, s }).catch(() => {})
   await update($, others, () => fromScan(s, Date.now()))
 }
 
@@ -281,10 +287,11 @@ const wanted = async ($: $) => (await $.store.get('open')) !== false
 // The wanted state this chat last acted on: only a change made in another chat opens or closes the pane here, so a
 // pane put up some other way stays, and a session with no surface does not retry its open on every poll.
 let synced: boolean | undefined
+const paneUp = async ($: $) => (await $.ui.panes()).some(p => p.id === PANE)
 async function syncPane($: $) {
   const want = await wanted($)
   if (want === synced) return
-  const up = (await $.ui.panes()).some(p => p.id === PANE)
+  const up = await paneUp($)
   synced = want
   if (want && !up) await openPane($)
   if (!want && up) await $.ui.close({ id: PANE })
@@ -308,7 +315,10 @@ export const register: Register = (on, options) => {
       void syncPane($).catch(() => {})
       if (polling) return
       polling = true
-      void Promise.allSettled([pollProject($), Date.now() - lastAll >= 10e3 ? pollAll($) : undefined]).finally(() => (polling = false))
+      // Nothing to draw while the pane is closed in this chat: no journals are read until it opens again.
+      void paneUp($).then(async up => {
+        if (up) await Promise.allSettled([pollProject($), Date.now() - lastAll >= 10e3 ? pollAll($) : undefined])
+      }).catch(() => {}).finally(() => (polling = false))
     })
     $.clock.every(1000, () => void read($, agents).then(l => { if (l.some(a => a.status === "running")) return update($, tick, n => n + 1) }).catch(() => {}))
     return next(e)
