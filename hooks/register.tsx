@@ -246,9 +246,10 @@ const SOFT: Record<string, string> = { claude: '#a98bf026', codex: '#3cc4ae26', 
 // Boxes have no corner radius of their own: a round border in the fill's own color draws the fill with rounded corners.
 const BAR = '#8a90a01a'
 const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
-// The most agents a project header draws as one mark each, and each family's mark there.
-const CUBES = 8
-const MARK = { claude: '✻', codex: '◆' }
+// The most agents a project header's family bar draws as one square each, and each bar's color: Claude in its
+// logo's orange there, since purple squares already mean max effort.
+const CUBES = 6
+const BAR_COLOR = { claude: '#D97757', codex: '#3cc4ae' }
 // Launchers drawn as their app: icon (graphical surfaces) and the logo's color.
 const APPS: Record<string, { app: string; color: string; short: string }> = {
   'Claude Desktop': { app: 'claude', color: '#D97757', short: 'Claude' },
@@ -516,23 +517,22 @@ export const register: Register = (on, options) => {
     const effCube = (effort?: string) => (
       <Text size="heading" color={EFF_COLOR[EFF.indexOf(effort ?? '')] ?? C.muted}>{effort ? '■' : '—'}</Text>
     )
-    // A project's agents as their family's mark next to its name (squares mean effort): running ones in the family's
-    // color, the rest gray. Past CUBES marks each kind collapses into one mark and its count in bold.
-    const groupCubes = (list: Agent[]) => {
-      const count = (f: Agent['family'], live: boolean) => list.filter(a => a.family === f && (a.status === 'running') === live).length
-      const parts = ([
-        [count('claude', true), MARK.claude, C.claude], [count('codex', true), MARK.codex, C.codex],
-        [count('claude', false), MARK.claude, C.muted], [count('codex', false), MARK.codex, C.muted],
-      ] as const).filter(([n]) => n > 0)
-      const many = list.length > CUBES
+    // A project's agents as one low bar per family next to its name (left out when the family has none there):
+    // a square per agent, running in the family's color, the rest gray. Past CUBES squares, or in a narrow pane,
+    // the bar holds two bold numbers instead: running in color, then the others in gray.
+    const groupCubes = (list: Agent[]) => (['claude', 'codex'] as const).map(f => {
+      const mine = list.filter(a => a.family === f)
+      if (!mine.length) return null
+      const live = mine.filter(a => a.status === 'running').length, rest = mine.length - live
+      const color = BAR_COLOR[f]
       return (
-        <Text>
-          {parts.map(([n, mark, color]) => (
-            <Text key={'q' + mark + color} color={color}>{many ? mark : mark.repeat(n)}{many && <Text bold>{n + ' '}</Text>}</Text>
-          ))}
+        <Text key={'q-' + f} backgroundColor={web ? color + '26' : undefined}>
+          {tight || mine.length > CUBES
+            ? <Text bold>{' '}<Text color={color}>{String(live)}</Text>{rest ? <Text color={C.muted}>{' ' + rest}</Text> : ''}{' '}</Text>
+            : <Text>{' '}<Text color={color}>{'■'.repeat(live)}</Text><Text color={C.muted}>{'■'.repeat(rest)}</Text>{' '}</Text>}
         </Text>
       )
-    }
+    })
     // Fold toggle on a root row with children: ▾ open, ▸ folded with the number of agents under it in its own color.
     // The glyph is drawn at title size so it fills the two-line row on graphical surfaces.
     const foldBtn = (a: Agent, n: number) => n > 0 && (
