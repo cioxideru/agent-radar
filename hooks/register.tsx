@@ -246,7 +246,8 @@ const SOFT: Record<string, string> = { claude: '#a98bf026', codex: '#3cc4ae26', 
 // Boxes have no corner radius of their own: a round border in the fill's own color draws the fill with rounded corners.
 const BAR = '#8a90a01a'
 const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
-const CHIP = '#8a90a026'
+// The most agents a project header draws as one square each.
+const CUBES = 8
 // Launchers drawn as their app: icon (graphical surfaces) and the logo's color.
 const APPS: Record<string, { app: string; color: string; short: string }> = {
   'Claude Desktop': { app: 'claude', color: '#D97757', short: 'Claude' },
@@ -514,6 +515,23 @@ export const register: Register = (on, options) => {
     const effCube = (effort?: string) => (
       <Text size="heading" color={EFF_COLOR[EFF.indexOf(effort ?? '')] ?? C.muted}>{effort ? '■' : '—'}</Text>
     )
+    // A project's agents as squares next to its name: running Claude and Codex in their colors, the rest gray.
+    // Past CUBES squares each color collapses into one square and its count in bold.
+    const groupCubes = (list: Agent[]) => {
+      const parts = ([
+        [list.filter(a => a.status === 'running' && a.family === 'claude').length, C.claude],
+        [list.filter(a => a.status === 'running' && a.family === 'codex').length, C.codex],
+        [list.filter(a => a.status !== 'running').length, C.muted],
+      ] as const).filter(([n]) => n > 0)
+      const many = list.length > CUBES
+      return (
+        <Text>
+          {parts.map(([n, color]) => (
+            <Text key={'q' + color} color={color}>{many ? '■' : '■'.repeat(n)}{many && <Text bold>{n + ' '}</Text>}</Text>
+          ))}
+        </Text>
+      )
+    }
     // Fold toggle on a root row with children: ▾ open, ▸ folded with the number of agents under it in its own color.
     // The glyph is drawn at title size so it fills the two-line row on graphical surfaces.
     const foldBtn = (a: Agent, n: number) => n > 0 && (
@@ -895,10 +913,7 @@ export const register: Register = (on, options) => {
             : projects.flatMap(([g, p]) => [
                 <Box key={'p' + p} flexDirection="row" gap={1} alignItems="center" paddingX={1} marginTop={1}>
                   <Text color={C.muted} bold>{p.toUpperCase()}</Text>
-                  {/* The session count on a soft rounded fill (a round border in the fill's color): marked out, but not a button. */}
-                  {web
-                    ? <Box backgroundColor={CHIP} borderStyle="round" borderColor={CHIP} paddingX={1}><Text bold>{String(shown.filter(a => groupOf(a) === g).length)}</Text></Box>
-                    : <Text dimColor>{' ' + shown.filter(a => groupOf(a) === g).length}</Text>}
+                  {groupCubes(shown.filter(a => groupOf(a) === g))}
                 </Box>,
                 ...rows(shown.filter(a => groupOf(a) === g)),
               ])}
