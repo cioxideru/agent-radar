@@ -100,10 +100,10 @@ test('hiding a root hides its whole tree, and a root folds and unfolds', async (
   await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true, agentId: 'A1' } as never)
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
-    const fold = (await ui.find({ type: 'Button', text: /▾/ } as never)) as { key: string }
+    const fold = (await ui.find({ type: 'Button', text: /˅/ } as never)) as { key: string }
     await ui.press({ key: fold.key })
     expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeUndefined()
-    const unfold = (await ui.find({ type: 'Button', text: /▸/ } as never)) as { key: string }
+    const unfold = (await ui.find({ type: 'Button', text: /˃/ } as never)) as { key: string }
     await ui.press({ key: unfold.key })
     expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeDefined()
     await ui.unmount()

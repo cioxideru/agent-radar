@@ -552,13 +552,13 @@ export const register: Register = (on, options) => {
           : <Text key={'q-' + f}><Text color={color}>{'■'.repeat(live)}</Text><Text color={C.muted}>{'■'.repeat(rest)}</Text></Text>
       })
     }
-    // Fold toggle on a root row with children: ▾ open, ▸ folded with the number of agents under it in its own color.
-    // The glyph is drawn at title size so it fills the two-line row on graphical surfaces.
+    // Fold toggle on a root row with children: a chevron, ˅ open and ˃ folded with the number of agents under it in its
+    // own color; body size, so the chevron stands as tall as that number.
     const foldBtn = (a: Agent, n: number) => n > 0 && (
       <Button key={'v' + a.id.slice(-48)} plain onPress={() => void update($, viewA, v => ({
         ...v, collapsed: collapsed.has(a.id) ? (v.collapsed ?? []).filter(x => x !== a.id) : [...(v.collapsed ?? []), a.id],
       }))}>
-        <Text size="title" color={C.muted}>{collapsed.has(a.id) ? '▸' : '▾'}</Text>
+        <Text bold color={C.muted}>{collapsed.has(a.id) ? '˃' : '˅'}</Text>
         {collapsed.has(a.id) ? <Text bold color={C.fresh}>{' ' + n}</Text> : ''}
         {' '}
       </Button>
