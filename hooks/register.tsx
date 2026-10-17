@@ -246,9 +246,7 @@ const SOFT: Record<string, string> = { claude: '#a98bf026', codex: '#3cc4ae26', 
 // Boxes have no corner radius of their own: a round border in the fill's own color draws the fill with rounded corners.
 const BAR = '#8a90a01a'
 const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
-// The most agents a project header's family bar draws as one square each, and each bar's color: Claude in its
-// logo's orange there, since purple squares already mean max effort.
-const CUBES = 6
+// Each project header bar's color: Claude in its logo's orange there, since purple squares already mean max effort.
 const BAR_COLOR = { claude: '#D97757', codex: '#3cc4ae' }
 // Launchers drawn as their app: icon (graphical surfaces) and the logo's color.
 const APPS: Record<string, { app: string; color: string; short: string }> = {
@@ -525,21 +523,25 @@ export const register: Register = (on, options) => {
       <Text size="heading" color={EFF_COLOR[EFF.indexOf(effort ?? '')] ?? C.muted}>{effort ? '■' : '—'}</Text>
     )
     // A project's agents as one low bar per family next to its name (left out when the family has none there):
-    // a square per agent, running in the family's color, the rest gray. Past CUBES squares, or in a narrow pane,
-    // the bar holds two bold numbers instead: running in color, then the others in gray.
-    const groupCubes = (list: Agent[]) => (['claude', 'codex'] as const).map(f => {
-      const mine = list.filter(a => a.family === f)
-      if (!mine.length) return null
-      const live = mine.filter(a => a.status === 'running').length, rest = mine.length - live
-      const color = BAR_COLOR[f]
-      return (
-        <Text key={'q-' + f} backgroundColor={web ? color + '26' : undefined}>
-          {tight || mine.length > CUBES
-            ? <Text bold>{' '}<Text color={color}>{String(live)}</Text>{rest ? <Text color={C.muted}>{' ' + rest}</Text> : ''}{' '}</Text>
-            : <Text>{' '}<Text color={color}>{'■'.repeat(live)}</Text><Text color={C.muted}>{'■'.repeat(rest)}</Text>{' '}</Text>}
-        </Text>
-      )
-    })
+    // a square per agent, running in the family's color, the rest gray. When the squares would not fit on the
+    // header line, each bar holds two bold numbers instead: running in color, then the others in gray.
+    const groupCubes = (list: Agent[], name: string) => {
+      const fams = (['claude', 'codex'] as const).filter(f => list.some(a => a.family === f))
+      // Name, its gap, and per bar its squares, two padding spaces and a gap; the pane's padding on both sides.
+      const counts = name.length + 1 + list.length + fams.length * 3 + 4 > cols
+      return fams.map(f => {
+        const mine = list.filter(a => a.family === f)
+        const live = mine.filter(a => a.status === 'running').length, rest = mine.length - live
+        const color = BAR_COLOR[f]
+        return (
+          <Text key={'q-' + f} backgroundColor={web ? color + '26' : undefined}>
+            {counts
+              ? <Text bold>{' '}<Text color={color}>{String(live)}</Text>{rest ? <Text color={C.muted}>{' ' + rest}</Text> : ''}{' '}</Text>
+              : <Text>{' '}<Text color={color}>{'■'.repeat(live)}</Text><Text color={C.muted}>{'■'.repeat(rest)}</Text>{' '}</Text>}
+          </Text>
+        )
+      })
+    }
     // Fold toggle on a root row with children: ▾ open, ▸ folded with the number of agents under it in its own color.
     // The glyph is drawn at title size so it fills the two-line row on graphical surfaces.
     const foldBtn = (a: Agent, n: number) => n > 0 && (
@@ -921,7 +923,7 @@ export const register: Register = (on, options) => {
             : projects.flatMap(([g, p]) => [
                 <Box key={'p' + p} flexDirection="row" gap={1} alignItems="center" paddingX={1} marginTop={1}>
                   <Text color={C.muted} bold>{p.toUpperCase()}</Text>
-                  {groupCubes(shown.filter(a => groupOf(a) === g))}
+                  {groupCubes(shown.filter(a => groupOf(a) === g), p)}
                 </Box>,
                 ...rows(shown.filter(a => groupOf(a) === g)),
               ])}
