@@ -67,6 +67,7 @@ test('charts draw sized SVG documents', () => {
   expect(sparkline([0, 5, 2], '#0f0')).toContain('<circle')
   expect(chip([{ n: 2, color: '#f00' }, { n: 1, color: '#999' }], false).source.match(/<rect/g)).toHaveLength(4)
   expect(chip([{ n: 12, color: '#f00' }, { n: 0, color: '#999' }], true).source).toContain('>12</text>')
+  expect(chip([{ n: 1, color: '#f00' }], false, 'data:image/png;base64,AA').source).toContain('<image')
 })
 
 test('context colors follow the fill thresholds and handoff links carry folder and journal', () => {

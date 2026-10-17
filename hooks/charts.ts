@@ -40,10 +40,13 @@ export function sparkline(series: number[], color: string, w = 360, h = 40) {
   )
 }
 
-// A low pill on a gray rounded track: one square per item in its color, or each group's count as bold digits.
-export function chip(parts: { n: number; color: string }[], asCounts: boolean, h = 14) {
-  const pad = 5, sq = 8, gap = 2, digit = 7, space = 5
-  let x = pad
+// A low pill on a gray rounded track: an optional icon first, then one square per item in its color, or each
+// group's count as bold digits.
+export function chip(parts: { n: number; color: string }[], asCounts: boolean, icon?: string, h = 14) {
+  const pad = 5, sq = 8, gap = 2, digit = 7, space = 5, ic = h - 4
+  let x = icon ? 3 : pad
+  const head = icon ? `<image x="${x}" y="2" width="${ic}" height="${ic}" href="${icon}"/>` : ''
+  if (icon) x += ic + 3
   const marks = parts.filter(p => p.n > 0).map(p => {
     if (asCounts) {
       const s = String(p.n)
@@ -58,5 +61,5 @@ export function chip(parts: { n: number; color: string }[], asCounts: boolean, h
     }).join('')
   })
   const w = Math.round(x - (asCounts ? space : gap) + pad)
-  return { w, h, source: svg(w, h, `<rect width="${w}" height="${h}" rx="${h / 2}" fill="#8a90a033"/>${marks.join('')}`) }
+  return { w, h, source: svg(w, h, `<rect width="${w}" height="${h}" rx="${h / 2}" fill="#8a90a033"/>${head}${marks.join('')}`) }
 }

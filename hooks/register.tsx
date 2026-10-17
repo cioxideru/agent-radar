@@ -41,6 +41,8 @@ let root = ''
 let t: Strings = STRINGS.en
 // App icons read from the installed apps at session start; until then (or without the apps) launchers are colored text.
 const ICONS: Record<string, string> = {}
+// The same icons as PNG data URLs, to place inside other drawings (the project header pills).
+const ICON_PNG: Record<string, string> = {}
 let home = ''
 // The system this runs on, read at session start; macOS has the app icons, Claude Desktop links and Terminal.
 let os: 'mac' | 'linux' | 'win' = 'mac'
@@ -264,6 +266,7 @@ async function loadIcons($: $) {
     if (ICONS[app]) continue
     const r = await $.process.run(['sh', '-c', 't=$(mktemp -t agent-radar).png; sips -s format png -Z 32 "$1" --out "$t" >/dev/null 2>&1 && base64 -i "$t"; rm -f "$t"', 'sh', file], { timeoutMs: 5000 }).catch(() => undefined)
     const b64 = r?.exitCode === 0 ? r.stdout.replace(/\s/g, '') : ''
+    if (b64) ICON_PNG[app] = 'data:image/png;base64,' + b64
     if (b64) ICONS[app] = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><image width="32" height="32" href="data:image/png;base64,${b64}"/></svg>`
   }
 }
@@ -527,15 +530,15 @@ export const register: Register = (on, options) => {
     // header line, each pill holds two bold numbers instead: running in color, then the others in gray.
     const groupCubes = (list: Agent[], name: string) => {
       const fams = (['claude', 'codex'] as const).filter(f => list.some(a => a.family === f))
-      // Name, its gap, and per bar its squares, two padding spaces and a gap; the pane's padding on both sides.
-      const counts = name.length + 1 + list.length + fams.length * 3 + 4 > cols
+      // Name, its gap, and per pill its squares plus about five cells of icon, padding and gap; the pane's padding.
+      const counts = name.length + 1 + list.length + fams.length * 5 + 4 > cols
       return fams.map(f => {
         const mine = list.filter(a => a.family === f)
         const live = mine.filter(a => a.status === 'running').length, rest = mine.length - live
         const color = BAR_COLOR[f]
         // Graphical surfaces: a rounded gray pill drawn as an image; the terminal: plain colored text.
         if (Svg) {
-          const c = chip([{ n: live, color }, { n: rest, color: C.muted! }], counts)
+          const c = chip([{ n: live, color }, { n: rest, color: C.muted! }], counts, ICON_PNG[f])
           return <Svg key={'q-' + f} source={c.source} alt={`${f} ${live}/${mine.length}`} width={c.w} height={c.h} />
         }
         return counts
