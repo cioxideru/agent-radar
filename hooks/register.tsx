@@ -275,9 +275,21 @@ async function openPane($: $) {
   await $.ui.open({ id: PANE, title: 'Agent Radar' })
 }
 
+// Whether the pane is wanted, shared by every chat through the store: opened or closed by hand in one, the others follow
+// on their next poll. Never set means wanted, so a first session opens it.
+const wanted = async ($: $) => (await $.store.get('open')) !== false
+async function syncPane($: $) {
+  const up = (await $.ui.panes()).some(p => p.id === PANE)
+  const want = await wanted($)
+  if (want && !up) await openPane($)
+  if (!want && up) await $.ui.close({ id: PANE })
+}
+
 export const register: Register = (on, options) => {
   t = STRINGS[(options.language as Lang) in STRINGS ? (options.language as Lang) : 'en']
   on('session.start', async ($, e, next) => {
+    // First, before the slower setup below, so the pane shows up with the session instead of after it.
+    if (await wanted($)) void openPane($)
     root = await $.session.cwd()
     os = (await $.env.get('OS')) === 'Windows_NT' ? 'win'
       : (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Linux' ? 'linux' : 'mac'
@@ -288,18 +300,25 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'agent-radar', description: t.cmdDescription })
     if (os === 'mac') void loadIcons($)
     $.clock.every(3000, () => {
+      void syncPane($).catch(() => {})
       if (polling) return
       polling = true
       void Promise.allSettled([pollProject($), Date.now() - lastAll >= 10e3 ? pollAll($) : undefined]).finally(() => (polling = false))
     })
     $.clock.every(1000, () => void read($, agents).then(l => { if (l.some(a => a.status === "running")) return update($, tick, n => n + 1) }).catch(() => {}))
-    void openPane($)
     return next(e)
   })
 
   on('command.run', { command: 'agent-radar' }, async $ => {
+    await $.store.set('open', true)
     await openPane($)
     return { text: t.opened }
+  })
+
+  // Closed by hand: the other chats close it too. Closes made by this mod (syncPane) or an unload change nothing.
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    if (e.origin.kind === 'person') await $.store.set('open', false)
+    return next(e)
   })
 
   on('agent.spawn', async ($, e, next) => {
