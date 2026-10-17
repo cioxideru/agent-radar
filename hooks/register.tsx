@@ -936,7 +936,8 @@ export const register: Register = (on, options) => {
             ? rows(shown)
             : projects.flatMap(([g, p]) => [
                 <Box key={'p' + p} flexDirection="row" gap={1} alignItems="center" paddingX={1} marginTop={1}>
-                  <Text color={C.muted} bold>{p}</Text>
+                  {/* The surface's own text color: darker than the muted gray on a light pane, lighter on a dark one. */}
+                  <Text bold>{p}</Text>
                   {groupCubes(shown.filter(a => groupOf(a) === g), p)}
                 </Box>,
                 ...rows(shown.filter(a => groupOf(a) === g)),
