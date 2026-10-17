@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Stats, View } from '../types'
-import { chip, meter, sparkline, stackBar } from './charts'
+import { chip, CODEX_MARK, meter, sparkline, stackBar } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
@@ -538,7 +538,7 @@ export const register: Register = (on, options) => {
         const color = BAR_COLOR[f]
         // Graphical surfaces: a rounded gray pill drawn as an image; the terminal: plain colored text.
         if (Svg) {
-          const c = chip([{ n: live, color }, { n: rest, color: C.muted! }], counts, ICON_PNG[f])
+          const c = chip([{ n: live, color }, { n: rest, color: C.muted! }], counts, f === 'codex' ? CODEX_MARK : ICON_PNG[f])
           return <Svg key={'q-' + f} source={c.source} alt={`${f} ${live}/${mine.length}`} width={c.w} height={c.h} />
         }
         return counts

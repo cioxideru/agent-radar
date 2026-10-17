@@ -40,12 +40,21 @@ export function sparkline(series: number[], color: string, w = 360, h = 40) {
   )
 }
 
-// A low pill on a gray rounded track: an optional icon first, then one square per item in its color, or each
-// group's count as bold digits.
+// Our own small Codex mark on a 16-unit square: the app's blue-violet disc with a white prompt. The app's icon
+// files carry a solid plate that turns into a dark or white blob at 10 px.
+export const CODEX_MARK =
+  '<defs><linearGradient id="cx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b58cff"/><stop offset="1" stop-color="#3d5afe"/></linearGradient></defs>' +
+  '<circle cx="8" cy="8" r="8" fill="url(#cx)"/>' +
+  '<path d="M4.6 5.2 L7.6 8 L4.6 10.8 M9 10.9 H12" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>'
+
+// A low pill on a gray rounded track: an optional icon first (an image URL, or SVG markup on a 16-unit square),
+// then one square per item in its color, or each group's count as bold digits.
 export function chip(parts: { n: number; color: string }[], asCounts: boolean, icon?: string, h = 14) {
   const pad = 5, sq = 8, gap = 2, digit = 7, space = 5, ic = h - 4
   let x = icon ? 3 : pad
-  const head = icon ? `<image x="${x}" y="2" width="${ic}" height="${ic}" href="${icon}"/>` : ''
+  const head = !icon ? ''
+    : icon.startsWith('<') ? `<svg x="${x}" y="2" width="${ic}" height="${ic}" viewBox="0 0 16 16">${icon}</svg>`
+    : `<image x="${x}" y="2" width="${ic}" height="${ic}" href="${icon}"/>`
   if (icon) x += ic + 3
   const marks = parts.filter(p => p.n > 0).map(p => {
     if (asCounts) {
