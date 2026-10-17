@@ -100,7 +100,7 @@ test('hiding a root hides its whole tree, and a root folds and unfolds', async (
   await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true, agentId: 'A1' } as never)
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
-    // The fold toggle, by its key ('v' and the root's id): on graphical surfaces its chevron is an image under the label.
+    // The fold toggle, by its key ('v' and the root's id): its glyph differs between surfaces and states.
     const foldKey = ((await ui.findAll({ type: 'Button' } as never)) as { key?: string }[]).find(b => /^v[A-Z]/.test(b.key ?? ''))!.key!
     await ui.press({ key: foldKey })
     expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeUndefined()

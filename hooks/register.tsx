@@ -45,7 +45,7 @@ const MARK: Record<'claude' | 'codex', string> = { claude: CLAUDE_MARK, codex: C
 const ICONS: Record<string, string> = Object.fromEntries(Object.entries(MARK).map(([k, m]) =>
   [k, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${m}</svg>`]))
 let home = ''
-// The system this runs on, read at session start; macOS has the app icons, Claude Desktop links and Terminal.
+// The system this runs on, read at session start; macOS has the Claude Desktop links and Terminal.
 let os: 'mac' | 'linux' | 'win' = 'mac'
 // The system's handler for a URL, folder or file; a file's folder where "show in Finder" has no equivalent.
 const opener = (target: string) =>
@@ -257,11 +257,11 @@ const BAR = '#8a90a01a'
 const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
 // Each project header bar's color: Claude in its logo's orange there, since purple squares already mean max effort.
 const BAR_COLOR = { claude: '#D97757', codex: '#3cc4ae' }
-// Launchers drawn as their app: icon (graphical surfaces) and the logo's color.
-const APPS: Record<string, { app: string; color: string }> = {
-  'Claude Desktop': { app: 'claude', color: '#D97757' },
-  'Claude Code CLI': { app: 'claude', color: '#D97757' },
-  'Codex Desktop': { app: 'codex', color: '#8B8CF8' },
+// Desktop app launchers, written in their logo's color.
+const APPS: Record<string, { color: string }> = {
+  'Claude Desktop': { color: '#D97757' },
+  'Claude Code CLI': { color: '#D97757' },
+  'Codex Desktop': { color: '#8B8CF8' },
 }
 // `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
 const W = { model: 11, modelShort: 9, cmodel: 11, eff: 6, effShort: 2, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
@@ -282,8 +282,8 @@ let synced: boolean | undefined
 async function syncPane($: $) {
   const want = await wanted($)
   if (want === synced) return
-  synced = want
   const up = (await $.ui.panes()).some(p => p.id === PANE)
+  synced = want
   if (want && !up) await openPane($)
   if (!want && up) await $.ui.close({ id: PANE })
 }
@@ -298,7 +298,7 @@ export const register: Register = (on, options) => {
     await upsert($, 'main', { project: projectOf(root) }, { ...blank('main', now), title: t.mainSession, how: t.claudeSession, status: 'idle', cwd: root, sid: sessionId, journal: journalOf(root, sessionId) })
     // Right after the session's own row exists (its first draw is not an empty list) and before the slower setup below.
     synced = await wanted($)
-    if (synced) void openPane($)
+    if (synced) void openPane($).catch(() => {})
     os = (await $.env.get('OS')) === 'Windows_NT' ? 'win'
       : (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Linux' ? 'linux' : 'mac'
     await $.command.register({ name: 'agent-radar', description: t.cmdDescription })
@@ -459,8 +459,8 @@ export const register: Register = (on, options) => {
     )
 
     // A 3 px bar stretched across its cell, so the number above sits close and the row stays one line plus a hair.
-    const thinBar = (share: number, color: string) =>
-      Svg && <Svg source={meter(share, color, 360, 4).replace('<svg ', '<svg preserveAspectRatio="none" ')} alt={Math.round(share * 100) + '%'} height={3} />
+    const thinBar = (share: number, color: string, alt = Math.round(share * 100) + '%') =>
+      Svg && <Svg source={meter(share, color, 360, 4).replace('<svg ', '<svg preserveAspectRatio="none" ')} alt={alt} height={3} />
     // Share of the context window in use: the percent over a bar, colored by how full it is.
     const ctxCell = (a: Agent) => {
       const s = ctxOf(a)
@@ -471,7 +471,7 @@ export const register: Register = (on, options) => {
         <Box key={'x' + a.id.slice(-40)} width={W.ctx} flexShrink={0} flexDirection="column" alignItems="center">
           <Text mono size="footnote" color={color}>{pct}</Text>
           {Svg
-            ? <Box width={W.ctx} flexShrink={0}>{thinBar(s ?? 0, color!)}</Box>
+            ? <Box width={W.ctx} flexShrink={0}>{thinBar(s ?? 0, color!, pct)}</Box>
             : <Box width={W.ctx} flexShrink={0} overflow="hidden">
                 <Text mono color={color}>{'━'.repeat(fill)}</Text>
                 <Text mono color={C.muted} dimColor>{'━'.repeat(W.ctx - fill)}</Text>
@@ -617,9 +617,10 @@ export const register: Register = (on, options) => {
     const card = (a: Agent, guide: string, cont: string, pad: number, fold?: ReturnType<typeof foldBtn>) => {
       const k = a.id.slice(-48)
       const isSel = a.id === selId
-      // A launcher with an app icon shows the icon alone beside the title; text launchers stay on the second line.
+      // An app launcher's mark sits beside the title, its mechanism (Desktop, CLI) stays on the second line;
+      // other launchers keep mark and mechanism together there.
       const app = APPS[a.how]
-      const icon = Svg && app && ICONS[app.app]
+      const icon = Svg && app && ICONS[a.family]
       return (
         <Box key={'c' + k} flexDirection="column" paddingX={1} width="100%" backgroundColor={isSel && web ? SOFT.sel : undefined} {...(isSel && web ? ROUND_SEL : {})}>
           <Box flexDirection="row" gap={1} width="100%">
@@ -652,7 +653,9 @@ export const register: Register = (on, options) => {
               : <Box width={2} flexShrink={0} alignItems="center">{effCube(a.effort)}</Box>}
             {tokCell(a)}
             {ctxCell(a)}
-            <Box flexGrow={1} flexShrink={1} minWidth={0}>{!icon && howCell(a)}</Box>
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>{icon
+              ? <Text color={app!.color} wrap="truncate-end">{mechanism(a.how)}</Text>
+              : howCell(a)}</Box>
           </Box>
         </Box>
       )

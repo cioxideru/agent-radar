@@ -72,7 +72,7 @@ test('charts draw sized SVG documents', () => {
   expect(sparkline([0, 5, 2], '#0f0')).toContain('<circle')
   expect(chip([{ n: 2, color: '#f00' }, { n: 1, color: '#999' }], false).source.match(/<rect/g)).toHaveLength(4)
   expect(chip([{ n: 12, color: '#f00' }, { n: 0, color: '#999' }], true).source).toContain('>12</text>')
-  expect(chip([{ n: 1, color: '#f00' }], false, 'data:image/png;base64,AA').source).toContain('<image')
+  expect(chip([{ n: 0, color: '#f00' }, { n: 7, color: '#999' }], true).source).toContain('#f00">0</text>')
   expect(chip([{ n: 1, color: '#f00' }], false, CODEX_MARK).source).toContain('viewBox="0 0 16 16"')
   expect(chip([{ n: 1, color: '#f00' }], false, CLAUDE_MARK).source).toContain('#D97757')
 })
