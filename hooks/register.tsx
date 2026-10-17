@@ -563,7 +563,8 @@ export const register: Register = (on, options) => {
           <Box position="absolute" top={0} left={0} display="none" hover={{ display: 'flex', scope: 'fold' + a.id.slice(-48) }}>
             <Svg source={chevron(!folded, C.fresh!)} alt="" width={16} height={20} />
           </Box>
-          {btn}
+          {/* Positioned and last, so it paints above the absolute chevrons and takes the click. */}
+          <Box position="relative">{btn}</Box>
         </Box>
       ) : btn
     }
