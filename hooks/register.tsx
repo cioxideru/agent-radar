@@ -257,6 +257,8 @@ const BAR = '#8a90a01a'
 const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
 // Each project header bar's color: Claude in its logo's orange there, since purple squares already mean max effort.
 const BAR_COLOR = { claude: '#D97757', codex: '#3cc4ae' }
+// The family filter labels in the header: the family colors a step more saturated, so they hold on a light pane.
+const LABEL = { claude: '#9466ee', codex: '#1fb59b' }
 // Desktop app launchers, written in their logo's color.
 const APPS: Record<string, { color: string }> = {
   'Claude Desktop': { color: '#D97757' },
@@ -873,7 +875,7 @@ export const register: Register = (on, options) => {
     // name turns gray and the Button dims.
     const family = (f: 'claude' | 'codex', name: string, n: number) => (
       <Box key={'c-' + f} flexDirection="row" alignItems="center" gap={1}>
-        <Text color={off.has(f) ? C.muted : C[f]}>{name}</Text>
+        <Text bold color={off.has(f) ? C.muted : LABEL[f]}>{name}</Text>
         <Button key={'cb-' + f} dimColor={off.has(f)} onPress={() => void update($, viewA, v => ({
           ...v, off: off.has(f) ? (v.off ?? []).filter(x => x !== f) : [...(v.off ?? []), f],
         }))}>
