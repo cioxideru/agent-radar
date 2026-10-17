@@ -431,6 +431,9 @@ export const register: Register = (on, options) => {
     // Token column: count over a bar (desktop), count beside a bar (terminal); narrowed with the effort column.
     const barW = web ? (tight ? W.bar : W.bar + 2) : W.bar, numW = tight ? 4 : W.tok
     const fmtTok = tight ? fmtKShort : fmtK
+    // A card's second line still has room for the five-square effort meter down to this width: padding, dot, model,
+    // meter, tokens, context, their gaps and a few cells of tree indent.
+    const cardEffLong = cols >= 2 + 2 + W.cmodel + W.eff + barW + W.ctx + 5 + 6
     const setView = (p: Partial<View>) => update($, viewA, v => ({ ...v, ...p }))
     const running = list.filter(a => a.status === 'running').length
     const nCodex = list.filter(a => a.family === 'codex').length
@@ -644,7 +647,9 @@ export const register: Register = (on, options) => {
             <Box width={W.cmodel} flexShrink={0} overflow="hidden">
               <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (a.model || '…') + ' '}</Text>
             </Box>
-            <Box width={2} flexShrink={0} alignItems="center">{effCube(a.effort)}</Box>
+            {cardEffLong
+              ? <Box width={W.eff} flexShrink={0} alignItems="center">{effText(a.effort)}</Box>
+              : <Box width={2} flexShrink={0} alignItems="center">{effCube(a.effort)}</Box>}
             {tokCell(a)}
             {ctxCell(a)}
             <Box flexGrow={1} flexShrink={1} minWidth={0}>{!icon && howCell(a)}</Box>
