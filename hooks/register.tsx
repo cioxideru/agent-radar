@@ -78,6 +78,9 @@ export const projectOf = (cwd = '') => cwd.replace(/[\\/]\.(claude|codex)[\\/]wo
 // A model as the rows show it: Codex's own models without the repeated "codex-" (codex-auto-review → auto-review), so
 // the narrow model column is not spent on an ellipsis. The details keep the full name.
 export const modelLabel = (m = '') => m.replace(/^codex-/, '')
+// A launch method without the family's name in front (Claude Desktop → Desktop, codex exec · bg → exec · bg), for
+// rows where the family's mark stands beside it.
+export const mechanism = (how: string) => how.replace(/^(Claude Code|Claude|Codex|codex) /, '')
 // Without the tenth of a million, for the narrowed token column.
 export const fmtKShort = (n: number) => (n >= 1e6 ? Math.round(n / 1e6) + 'M' : fmtK(n))
 export const fmtK = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n))
@@ -255,10 +258,10 @@ const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
 // Each project header bar's color: Claude in its logo's orange there, since purple squares already mean max effort.
 const BAR_COLOR = { claude: '#D97757', codex: '#3cc4ae' }
 // Launchers drawn as their app: icon (graphical surfaces) and the logo's color.
-const APPS: Record<string, { app: string; color: string; short: string }> = {
-  'Claude Desktop': { app: 'claude', color: '#D97757', short: 'Claude' },
-  'Claude Code CLI': { app: 'claude', color: '#D97757', short: 'CLI' },
-  'Codex Desktop': { app: 'codex', color: '#8B8CF8', short: 'Codex' },
+const APPS: Record<string, { app: string; color: string }> = {
+  'Claude Desktop': { app: 'claude', color: '#D97757' },
+  'Claude Code CLI': { app: 'claude', color: '#D97757' },
+  'Codex Desktop': { app: 'codex', color: '#8B8CF8' },
 }
 // `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
 const W = { model: 11, modelShort: 9, cmodel: 11, eff: 6, effShort: 2, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
@@ -594,15 +597,16 @@ export const register: Register = (on, options) => {
       )
     }
     // A press on it opens that session's chat in Claude Desktop.
+    // The family's mark, then the mechanism without the family's name, which the mark already says: Desktop, CLI,
+    // exec · bg, Agent · Explore. Desktop apps keep their app's color, the rest are dim. Text alone on the terminal.
     const howCell = (a: Agent) => {
       const app = APPS[a.how]
-      if (!app) return <Text dimColor wrap="truncate-end">{a.how}</Text>
-      const icon = ICONS[app.app]
-      if (!Svg || !icon) return <Text color={app.color} wrap="truncate-end">{a.how}</Text>
+      const color = app?.color
+      if (!Svg) return <Text color={color} dimColor={!app} wrap="truncate-end">{a.how}</Text>
       return (
-        <Box flexDirection="row" gap={1} alignItems="center">
-          <Svg source={icon} alt={a.how} width={16} height={16} />
-          <Text color={app.color} wrap="truncate-end">{app.short}</Text>
+        <Box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
+          <Svg source={ICONS[a.family]!} alt={a.family} width={16} height={16} />
+          <Text color={color} dimColor={!app} wrap="truncate-end">{mechanism(a.how)}</Text>
         </Box>
       )
     }
