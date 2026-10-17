@@ -11,7 +11,7 @@ Guide for AI coding agents and contributors working on Agent Radar, a Claude Cod
 | `hooks/hooks.json` | points the engine at `register.tsx` |
 | `hooks/register.tsx` | the whole mod: hooks, polling, the Pane drawing, actions |
 | `hooks/i18n.ts` | every user-visible string, `en` and `ru`; `Strings` is the English shape |
-| `hooks/charts.ts` | SVG builders for the token stack bar, meters and the sparkline |
+| `hooks/charts.ts` | SVG builders for the token stack bar, meters, the sparkline and the project pills; our own Claude and Codex marks |
 | `hooks/scan.ts` | `scan.py` embedded as a string — generated, do not edit by hand |
 | `scan.py` | journal scanner run with `python3 -I -c` (`python` on Windows); paths come out with `/` on every system; prints `{codex: [...], claude: [...]}` as JSON |
 | `types/index.d.ts` | `Agent`, `Stats`, `View` and the `PluginState['agent-radar']` contract |
@@ -62,7 +62,7 @@ npx -y -p typescript@5.6.3 tsc -p tsconfig.json
 
 - **Strings go through `i18n.ts`.** Add the key to `en` first, then to `ru` (the type forces it). Logic must never compare against translated text; `t.bg` is the only translated marker read back, and only within one load.
 - **Element rules of the Pane:** a `Button` holds strings and `Text` only; `Box` width is a number of cells or a percentage; `Svg` sizes are CSS pixels and only exist on graphical surfaces — always keep a text fallback for the terminal.
-- **State** lives in `atom`s declared in `types/index.d.ts`; module variables reset on every reload.
+- **State** lives in `atom`s declared in `types/index.d.ts`; module variables reset on every reload. What chats share goes through `$.store`: `open` (whether the pane is wanted) and `allScan` (the last *All* scan, reused for 9 s). Journals are read only while the pane is open.
 - **macOS first, Linux and Windows kept working.** `os` is read at session start; go through `opener` / `reveal` instead of calling `open`, and keep macOS-only extras (Terminal via `osascript`) behind `os === 'mac'` with a fallback. Do not ship app icons or other third-party assets: the Claude and Codex marks in `charts.ts` are our own small drawings.
 - **No network, no secrets.** The mod reads local journals only. Never put real project names, paths or transcripts in tests, docs or screenshots.
 - Keep diffs small and in the style of the surrounding code: short helpers, comments that say why.
