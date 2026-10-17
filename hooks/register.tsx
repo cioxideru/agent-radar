@@ -39,8 +39,9 @@ const HOW: Record<string, string> = {
 let root = ''
 // The pane's texts, picked by the `language` option when the module loads.
 let t: Strings = STRINGS.en
-// App icons read from the installed apps at session start; until then (or without the apps) launchers are colored text.
-const ICONS: Record<string, string> = {}
+// Launcher icons: Claude's read from the installed app at session start (until then, or without it, colored text).
+// Codex uses our own drawn mark everywhere: the app's icon files carry a plate that reads as a blob at row size.
+const ICONS: Record<string, string> = { codex: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${CODEX_MARK}</svg>` }
 // The same icons as PNG data URLs, to place inside other drawings (the project header pills).
 const ICON_PNG: Record<string, string> = {}
 let home = ''
@@ -261,7 +262,6 @@ const APPS: Record<string, { app: string; color: string; short: string }> = {
 }
 const APP_ICON_FILES: Record<string, string> = {
   claude: '/Applications/Claude.app/Contents/Resources/electron.icns',
-  codex: '/Applications/ChatGPT.app/Contents/Resources/icon-codex-dark-color.png',
 }
 // Each icon converted to a 32px PNG by macOS `sips` and wrapped as an SVG source for the Svg element.
 async function loadIcons($: $) {
