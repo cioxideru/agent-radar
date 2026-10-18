@@ -52,6 +52,10 @@ const opener = (target: string) =>
   os === 'mac' ? ['open', target] : os === 'win' ? ['rundll32', 'url.dll,FileProtocolHandler', target] : ['xdg-open', target]
 const reveal = (file: string) => (os === 'mac' ? ['open', '-R', file] : opener(file.replace(/[\\/][^\\/]*$/, '')))
 let sessionId = ''
+// The About block: the version is read once from the plugin's own plugin.json (it changes with every release);
+// the license and the project page do not.
+const LICENSE = 'Apache-2.0', HOMEPAGE = 'https://github.com/cioxideru/agent-radar'
+let version: string | undefined
 // The current session's context window, used for Claude rows whose journal does not record one.
 // ponytail: one window for every Claude model; a per-model table if they diverge.
 let claudeWindow = 0
@@ -416,6 +420,11 @@ export const register: Register = (on, options) => {
     const view = await read($, viewA)
     await read($, tick)
     const mine = await read($, agents)
+    if (view.about && version === undefined) {
+      // `root` holds plugin.json: the plugin's folder or its .claude-plugin, depending on how the host counts it.
+      const read1 = (p: string) => $.fs.read(p).then(s => String(JSON.parse(s as string).version ?? ''))
+      version = await read1(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => read1(`${$.plugin.root}/plugin.json`)).catch(() => '')
+    }
     const all = view.scope === 'proj' ? mine : await read($, others)
     // This chat's own session, marked in both scopes: its row here, and its journal's row among all sessions.
     // Asked live: after a resume or /clear the process goes on under another id than the one session start saw.
@@ -921,10 +930,26 @@ export const register: Register = (on, options) => {
             <Button key="f-done" onPress={() => void setView({ showDone: !view.showDone }).then(() => pollAll($))}>
               {(view.showDone ? '☑ ' : '☐ ') + t.finished}
             </Button>
+            <Button key="f-about" onPress={() => void setView({ about: !view.about })}>
+              <Text color={view.about ? C.fresh : C.muted}>ⓘ</Text>{' ' + t.about}
+            </Button>
             {hidden.size > 0 && (
               <Button key="f-hidden" onPress={() => void setView({ hidden: [] })}><Text color={C.muted}>⊘</Text>{t.hidden(hidden.size)}</Button>
             )}
           </Box>
+          {view.about && (
+            <Box key="about" flexDirection="column" paddingX={1}>
+              <Text bold>Agent Radar</Text>
+              <Text dimColor>{t.aboutText}</Text>
+              <Box flexDirection="row" gap={2} flexWrap="wrap" alignItems="center">
+                <Text><Text dimColor>{t.version + ' '}</Text>{version || '—'}</Text>
+                <Text><Text dimColor>{t.license + ' '}</Text>{LICENSE}</Text>
+                <Button key="about-gh" plain onPress={() => run(opener(HOMEPAGE), t.linkOpened)}>
+                  <Text color={C.fresh}>{HOMEPAGE.replace(/^https:\/\//, '') + ' ↗'}</Text>
+                </Button>
+              </Box>
+            </Box>
+          )}
           <Box flexDirection="row" gap={1} flexWrap="wrap" paddingX={1}>
             <Box key="c-running" flexDirection="row" alignItems="center">
               <Text color={C.running}>●</Text>
