@@ -269,8 +269,8 @@ const SOFT: Record<string, string> = { claude: '#a98bf026', codex: '#3cc4ae26', 
 // Boxes have no corner radius of their own: a round border in the fill's own color draws the fill with rounded corners.
 const BAR = '#8a90a01a'
 const ROUND_SEL = { borderStyle: 'round', borderColor: SOFT.sel }
-// The title of this chat's own session: a deep blue that still reads on a dark pane.
-const ME = '#2f6fd6'
+// The tint behind this chat's own session title: a light blue that also holds on a dark pane.
+const ME = '#5aa9e640'
 // Each project header bar's color: Claude in its logo's orange there, since purple squares already mean max effort.
 const BAR_COLOR = { claude: '#D97757', codex: '#3cc4ae' }
 // The family filter labels in the header: the family colors a step more saturated, so they hold on a light pane.
@@ -597,9 +597,13 @@ export const register: Register = (on, options) => {
             {fold}
             {/* The title alone gives way to a long name, so the ↗ after it keeps its place and never runs into the model. */}
             <Box flexShrink={1} minWidth={0} overflow="hidden">
-              <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
-                <Text bold={isSel} color={isMe(a) ? ME : undefined} wrap={isMe(a) ? undefined : 'truncate-end'}>{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
-              </Button>
+              {/* This chat's own session: a light blue tint on a Box around the title, since a desktop button
+                  draws its label in its own color whatever the Text asks for. */}
+              <Box flexShrink={1} minWidth={0} backgroundColor={isMe(a) ? ME : undefined}>
+                <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
+                  <Text bold={isSel} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
+                </Button>
+              </Box>
             </Box>
             {a.open && <Box flexShrink={0}>{openBtn(a)}</Box>}
           </Box>
@@ -655,9 +659,13 @@ export const register: Register = (on, options) => {
             <Box width={2} flexShrink={0}><Text color={C[a.status] ?? C.muted}>●</Text></Box>
             <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden" flexDirection="row" alignItems="center">
               {fold}
-              <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
-                <Text bold={isSel} color={isMe(a) ? ME : undefined} wrap={isMe(a) ? undefined : 'truncate-end'}>{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
-              </Button>
+              {/* This chat's own session: a light blue tint on a Box around the title, since a desktop button
+                  draws its label in its own color whatever the Text asks for. */}
+              <Box flexShrink={1} minWidth={0} backgroundColor={isMe(a) ? ME : undefined}>
+                <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
+                  <Text bold={isSel} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
+                </Button>
+              </Box>
             </Box>
             {/* Outside the shrinking title, so a squeezed card truncates the title instead of piling these up. */}
             {(a.open || icon) && (

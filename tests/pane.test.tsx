@@ -147,7 +147,7 @@ test('the All scope reuses a fresh scan another chat left in the store', async (
   await ui.unmount()
 })
 
-test("this chat's own session title stands out in its own color", async ($, on) => {
+test("this chat's own session title stands out on a tint", async ($, on) => {
   // The session's own row is written at session start, which a test does not fire: add it to the next write.
   const main = { id: 'main', project: 'Proj', title: 'Main session', model: 'opus-5-5', family: 'claude', tokIn: 1, tokOut: 1, t0: Date.now() - 60e3, status: 'running', how: 'Claude Code CLI', sid: 'S1' }
   on('state.set', { plugin: 'agent-radar', key: 'agents' } as never, (($: unknown, e: { value: unknown[] }, next: (e: unknown) => unknown) =>
@@ -161,16 +161,16 @@ test("this chat's own session title stands out in its own color", async ($, on) 
   await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true })
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
-    const color = async (text: RegExp) => ((await ui.findAll({ type: 'Text', text } as never)) as { props: { color?: string } }[]).map(x => x.props.color).find(Boolean)
-    expect(await color(/Main session/)).toBe('#2f6fd6')
-    expect(await color(/Diff review/)).toBeUndefined()
+    const tint = async (text: RegExp) => ((await ui.findAll({ type: 'Box', text } as never)) as { props: { backgroundColor?: string } }[]).map(x => x.props.backgroundColor).includes('#5aa9e640')
+    expect(await tint(/^Main session$/)).toBe(true)
+    expect(await tint(/^Diff review$/)).toBe(false)
     await ui.unmount()
   }
   // Among all sessions, the row read from this session's own journal.
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
   await ui.press({ key: 's-all' })
-  const color = async (text: RegExp) => ((await ui.findAll({ type: 'Text', text } as never)) as { props: { color?: string } }[]).map(x => x.props.color).find(Boolean)
-  expect(await color(/Own journal row/)).toBe('#2f6fd6')
-  expect(await color(/Other chat row/)).toBeUndefined()
+  const tint = async (text: RegExp) => ((await ui.findAll({ type: 'Box', text } as never)) as { props: { backgroundColor?: string } }[]).map(x => x.props.backgroundColor).includes('#5aa9e640')
+  expect(await tint(/^Own journal row$/)).toBe(true)
+  expect(await tint(/^Other chat row$/)).toBe(false)
   await ui.unmount()
 })
