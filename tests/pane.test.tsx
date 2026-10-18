@@ -174,16 +174,3 @@ test("this chat's own session title stands out in its own color", async ($, on) 
   expect(await color(/Other chat row/)).toBeUndefined()
   await ui.unmount()
 })
-
-test('the About block shows the version, license and project link from plugin.json', async $ => {
-  for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
-    expect(await ui.find({ type: 'Text', text: /Apache-2\.0/ })).toBeUndefined()
-    await ui.press({ key: 'f-about' })
-    expect(await ui.find({ type: 'Text', text: /Apache-2\.0/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Version / })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /github\.com\/cioxideru\/agent-radar/ })).toBeDefined()
-    await ui.press({ key: 'f-about' })
-    await ui.unmount()
-  }
-})

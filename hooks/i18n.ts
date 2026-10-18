@@ -22,7 +22,7 @@ const en = {
   context: 'Context ', of: ' of ', ctxAlt: 'context fill',
   codexLimit: 'Codex limit ', weekWindow: ' of the weekly window', hWindow: (h: number) => ` of a ${h}h window`, limitAlt: 'Codex limit',
   activityTitle: 'Activity · output tokens over time', activityAlt: 'activity chart', tools: 'Tools',
-  scope: { proj: 'This project', all: 'All' }, finished: 'Finished', about: 'About', aboutText: 'Live pane of Claude subagents and the Codex runs they launch', version: 'Version', license: 'License', linkOpened: 'Opened in the browser', sumIn: 'In', sumOut: 'Out', sumTotal: 'Total', hidden: (n: number) => ` Hidden ${n}`,
+  scope: { proj: 'This project', all: 'All' }, finished: 'Finished', sumIn: 'In', sumOut: 'Out', sumTotal: 'Total', hidden: (n: number) => ` Hidden ${n}`,
   runningN: (n: number) => `${n} Work`, scanning: 'Scanning journals…', none: 'No agents yet.',
   handoffPrompt: (title: string, journal: string) =>
     `Continue the work from the session "${title}". Its journal: ${journal}\nRead the end of the journal, recover the task, what is done and what is left, summarize briefly and carry on.`,
@@ -53,7 +53,7 @@ const ru: Strings = {
   context: 'Контекст ', of: ' из ', ctxAlt: 'заполнение контекста',
   codexLimit: 'Лимит Codex ', weekWindow: ' недельного окна', hWindow: h => ` окна ${h}ч`, limitAlt: 'лимит Codex',
   activityTitle: 'Активность · выходные токены по времени', activityAlt: 'график активности', tools: 'Инструменты',
-  scope: { proj: 'Этот проект', all: 'Все' }, finished: 'Завершённые', about: 'О программе', aboutText: 'Живая панель субагентов Claude и запущенных ими Codex', version: 'Версия', license: 'Лицензия', linkOpened: 'Открыто в браузере', sumIn: 'Вход', sumOut: 'Выход', sumTotal: 'Всего', hidden: n => ` Скрытые ${n}`,
+  scope: { proj: 'Этот проект', all: 'Все' }, finished: 'Завершённые', sumIn: 'Вход', sumOut: 'Выход', sumTotal: 'Всего', hidden: n => ` Скрытые ${n}`,
   runningN: n => `${n} в работе`, scanning: 'Сканирую журналы…', none: 'Агентов пока нет.',
   handoffPrompt: (title, journal) =>
     `Продолжи работу из сессии «${title}». Её журнал: ${journal}\nПрочитай конец журнала, восстанови задачу, что сделано и что осталось, коротко перескажи и продолжай.`,

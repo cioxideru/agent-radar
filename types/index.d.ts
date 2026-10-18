@@ -51,8 +51,6 @@ export type View = {
   runningOnly?: boolean
   // Families switched off in the pane: their agents are left out of the list.
   off?: ('claude' | 'codex')[]
-  // The About block under the switches.
-  about?: boolean
   confirm?: string
   note?: string
 }
