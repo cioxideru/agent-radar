@@ -418,7 +418,8 @@ export const register: Register = (on, options) => {
     const mine = await read($, agents)
     const all = view.scope === 'proj' ? mine : await read($, others)
     // This chat's own session, marked in both scopes: its row here, and its journal's row among all sessions.
-    const meSid = mine.find(a => a.id === 'main')?.sid
+    // Asked live: after a resume or /clear the process goes on under another id than the one session start saw.
+    const meSid = (await Promise.resolve().then(() => $.session.id()).catch(() => undefined)) || mine.find(a => a.id === 'main')?.sid
     const isMe = (a: Agent) => a.id === 'main' || (!!meSid && a.sid === meSid)
     const hidden = new Set(view.hidden ?? [])
     const pinned = new Set(view.pinned ?? [])
