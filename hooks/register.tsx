@@ -598,7 +598,7 @@ export const register: Register = (on, options) => {
             {/* The title alone gives way to a long name, so the ↗ after it keeps its place and never runs into the model. */}
             <Box flexShrink={1} minWidth={0} overflow="hidden">
               <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
-                <Text bold={isSel} color={isMe(a) ? ME : undefined} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
+                <Text bold={isSel} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{isMe(a) ? <Text color={ME}>{a.title}</Text> : a.title}</Text>
               </Button>
             </Box>
             {a.open && <Box flexShrink={0}>{openBtn(a)}</Box>}
@@ -656,7 +656,7 @@ export const register: Register = (on, options) => {
             <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden" flexDirection="row" alignItems="center">
               {fold}
               <Button key={'t' + k} plain onPress={() => void setView({ sel: isSel ? undefined : a.id, note: undefined, confirm: undefined })}>
-                <Text bold={isSel} color={isMe(a) ? ME : undefined} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{a.title}</Text>
+                <Text bold={isSel} wrap="truncate-end">{pinned.has(a.id) && <Text color={C.waiting}>★ </Text>}{isMe(a) ? <Text color={ME}>{a.title}</Text> : a.title}</Text>
               </Button>
             </Box>
             {/* Outside the shrinking title, so a squeezed card truncates the title instead of piling these up. */}

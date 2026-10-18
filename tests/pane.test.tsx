@@ -161,7 +161,7 @@ test("this chat's own session title stands out in its own color", async ($, on) 
   await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true })
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
-    const color = async (text: RegExp) => ((await ui.find({ type: 'Text', text } as never)) as { props: { color?: string } }).props.color
+    const color = async (text: RegExp) => ((await ui.findAll({ type: 'Text', text } as never)) as { props: { color?: string } }[]).map(x => x.props.color).find(Boolean)
     expect(await color(/Main session/)).toBe('#2f6fd6')
     expect(await color(/Diff review/)).toBeUndefined()
     await ui.unmount()
@@ -169,7 +169,7 @@ test("this chat's own session title stands out in its own color", async ($, on) 
   // Among all sessions, the row read from this session's own journal.
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
   await ui.press({ key: 's-all' })
-  const color = async (text: RegExp) => ((await ui.find({ type: 'Text', text } as never)) as { props: { color?: string } }).props.color
+  const color = async (text: RegExp) => ((await ui.findAll({ type: 'Text', text } as never)) as { props: { color?: string } }[]).map(x => x.props.color).find(Boolean)
   expect(await color(/Own journal row/)).toBe('#2f6fd6')
   expect(await color(/Other chat row/)).toBeUndefined()
   await ui.unmount()
