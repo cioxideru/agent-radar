@@ -146,3 +146,31 @@ test('the All scope reuses a fresh scan another chat left in the store', async (
   expect(runs).toBe(0)
   await ui.unmount()
 })
+
+test("this chat's own session title stands out in its own color", async ($, on) => {
+  // The session's own row is written at session start, which a test does not fire: add it to the next write.
+  const main = { id: 'main', project: 'Proj', title: 'Main session', model: 'opus-5-5', family: 'claude', tokIn: 1, tokOut: 1, t0: Date.now() - 60e3, status: 'running', how: 'Claude Code CLI', sid: 'S1' }
+  on('state.set', { plugin: 'agent-radar', key: 'agents' } as never, (($: unknown, e: { value: unknown[] }, next: (e: unknown) => unknown) =>
+    next({ ...e, value: [main, ...e.value.filter(a => (a as { id: string }).id !== 'main')] })) as never)
+  // A fresh All scan holding this session's journal and another chat's.
+  mock.store(on, { allScan: { at: Date.now(), mins: 15, s: { codex: [], claude: [
+    { path: '/p/S1.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date().toISOString(), title: 'Own journal row' },
+    { path: '/p/S2.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date().toISOString(), title: 'Other chat row' },
+  ] } } })
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+    const color = async (text: RegExp) => ((await ui.find({ type: 'Text', text } as never)) as { props: { color?: string } }).props.color
+    expect(await color(/Main session/)).toBe('#2f6fd6')
+    expect(await color(/Diff review/)).toBeUndefined()
+    await ui.unmount()
+  }
+  // Among all sessions, the row read from this session's own journal.
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  await ui.press({ key: 's-all' })
+  const color = async (text: RegExp) => ((await ui.find({ type: 'Text', text } as never)) as { props: { color?: string } }).props.color
+  expect(await color(/Own journal row/)).toBe('#2f6fd6')
+  expect(await color(/Other chat row/)).toBeUndefined()
+  await ui.unmount()
+})
