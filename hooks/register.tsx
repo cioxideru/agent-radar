@@ -162,12 +162,13 @@ async function pollProject($: $) {
     })
     // Codex sessions in this project nobody here launched (Codex Desktop, another terminal).
     for (const r of codex) {
-      if (claimed.has(r.path) || !inRoot(r.cwd) || codexStatus(r, now) === 'completed') continue
+      if (claimed.has(r.path) || !inRoot(r.cwd) || codexStatus(r, now) === 'completed' || ranNothing(r)) continue
       const row = recToCodex(r, now)
       const i = next.findIndex(a => a.id === row.id)
       next = i < 0 ? [...next, row] : next.map((a, j) => (j === i ? row : a))
     }
-    return next
+    // Rows this poll added on its own for such shells in earlier versions go too.
+    return next.filter(a => !(a.family === 'codex' && a.id === a.rollout && ranNothing(a)))
   })
 
   const usage = await $.session.usage(now - compactAt > 60e3 ? { breakdown: 'summary' } : undefined).catch(() => undefined)
@@ -182,6 +183,10 @@ async function pollProject($: $) {
   const tok = rows.reduce((s, a) => s + a.tokIn + a.tokOut, 0)
   $.ui.status(running ? t.statusLine(running, fmtK(tok)) : undefined)
 }
+
+// A rollout with no model and no tokens never ran a turn: Codex Desktop leaves such shells behind (an auto-review
+// thread forked and never started). They are not agents, so they are not shown.
+export const ranNothing = (r: { model?: string; tokIn: number; tokOut: number }) => (!r.model || r.model === '?') && !r.tokIn && !r.tokOut
 
 const statsOf = (r: Rec): Stats => ({
   requests: r.requests, turns: r.turns, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, reasoning: r.reasoning, ctx: r.ctx,
@@ -219,7 +224,8 @@ export function fromScan(s: Scan, now: number): Agent[] {
     }
   })
   const byThread = new Map(s.codex.map(r => [r.id, r.path]))
-  const codex = s.codex.map(r => {
+  // A launch from Bash stays even before its first turn: it is the run that was just started.
+  const codex = s.codex.filter(r => r.launch || !ranNothing(r)).map(r => {
     const row = recToCodex(r, now)
     const l = r.launch
     const up = r.parent && byThread.get(r.parent)

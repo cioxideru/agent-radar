@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from '../hooks/charts'
 
-import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, modelLabel, ordered, parseCodex, projectOf, shq } from '../hooks/register'
+import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, modelLabel, ordered, parseCodex, projectOf, ranNothing, shq } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -85,4 +85,15 @@ test('context colors follow the fill thresholds and handoff links carry folder a
   expect(url.searchParams.get('q')).toContain('/j/s.jsonl')
   expect(shq("it's")).toBe(`'it'\\''s'`)
   expect(asq('a "b" \\c')).toBe('a \\"b\\" \\\\c')
+})
+
+test('codex shells that never ran a turn are left out of all sessions', () => {
+  const now = Date.parse('2026-10-16T12:00:00Z')
+  const rows = fromScan({ claude: [], codex: [
+    { path: '/c/shell.jsonl', id: 'T9', mtime: now, tokIn: 0, tokOut: 0, cwd: '/x/Proj', originator: 'Codex Desktop', kind: 'guardian_review', parent: 'T1' },
+    { path: '/c/real.jsonl', id: 'T1', mtime: now, tokIn: 5, tokOut: 1, cwd: '/x/Proj', originator: 'Codex Desktop', model: 'gpt-6' },
+  ] }, now)
+  expect(rows.map(r => r.id)).toEqual(['/c/real.jsonl'])
+  expect(ranNothing({ model: '?', tokIn: 0, tokOut: 0 })).toBe(true)
+  expect(ranNothing({ model: 'gpt-6', tokIn: 0, tokOut: 0 })).toBe(false)
 })
