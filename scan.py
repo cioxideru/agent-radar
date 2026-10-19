@@ -164,7 +164,7 @@ def desktop():
         if d.get('cliSessionId'):
             cli[d.get('sessionId')] = d['cliSessionId']
             recs.append((d, 'code' if 'claude-code-sessions' in p else 'work'))
-    return {d['cliSessionId']: {'id': d.get('sessionId'), 'kind': k, 'cwd': d.get('cwd'), 'parent': cli.get((d.get('spawnedFrom') or {}).get('sessionId'))}
+    return {d['cliSessionId']: {'id': d.get('sessionId'), 'kind': k, 'cwd': d.get('cwd'), 'title': d.get('title'), 'parent': cli.get((d.get('spawnedFrom') or {}).get('sessionId'))}
             for d, k in recs if not d.get('isArchived')}
 
 def withDesk(r, desk):
@@ -198,6 +198,8 @@ if mode == 'all':
 elif me:
     # ponytail: every child journal is read on each poll; an mtime cache if a session starts dozens of them.
     desk = desktop()
+    # The title Claude Desktop gives this session, so its row reads as it does among all sessions.
+    out['title'] = (desk.get(me) or {}).get('title')
     for sid, d in desk.items():
         for p in files(H + '/.claude/projects/*/' + sid + '.jsonl') if d['parent'] == me else []:
             out['claude'].append(withDesk(claude(p, os.stat(p).st_mtime), desk))

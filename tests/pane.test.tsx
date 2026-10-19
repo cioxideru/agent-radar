@@ -193,3 +193,22 @@ test('a long list draws its newest rows and says how many older ones it left out
     await ui.unmount()
   }
 })
+
+test('a subagent quiet past the activity window waits for Finished, as among all sessions', async ($, on) => {
+  const now = Date.now()
+  const rows = [
+    { id: 'A1', parentId: 'main', project: 'Proj', title: 'Quiet since yesterday', model: 'sonnet-5-5', family: 'claude', tokIn: 1, tokOut: 1, t0: now - 13 * 3600e3, status: 'waiting', how: 'Agent', stats: { lastAt: now - 13 * 3600e3 } },
+    { id: 'A2', parentId: 'main', project: 'Proj', title: 'Busy a minute ago', model: 'sonnet-5-5', family: 'claude', tokIn: 1, tokOut: 1, t0: now - 3600e3, status: 'waiting', how: 'Agent', stats: { lastAt: now - 60e3 } },
+  ]
+  on('state.set', { plugin: 'agent-radar', key: 'agents' } as never, (($: unknown, e: { value: unknown[] }, next: (e: unknown) => unknown) =>
+    next({ ...e, value: [...rows, ...e.value.filter(a => !['A1', 'A2'].includes((a as { id: string }).id))] })) as never)
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review' })
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  expect(await ui.find({ text: /Busy a minute ago/ } as never)).toBeDefined()
+  expect(await ui.find({ text: /Quiet since yesterday/ } as never)).toBeUndefined()
+  expect(await ui.find({ text: /This session/ } as never)).toBeDefined()
+  await ui.press({ key: 'f-done' })
+  expect(await ui.find({ text: /Quiet since yesterday/ } as never)).toBeDefined()
+  await ui.unmount()
+})

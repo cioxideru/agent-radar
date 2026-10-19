@@ -7,7 +7,7 @@ import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
 type $ = EngineInterface
-type Scan = { codex: Rec[]; claude: Rec[] }
+type Scan = { codex: Rec[]; claude: Rec[]; title?: string }
 type Rec = {
   path: string; mtime: number; tokIn: number; tokOut: number; cwd?: string; t0?: string
   model?: string; effort?: string; title?: string
@@ -15,7 +15,7 @@ type Rec = {
   entry?: string; meta?: { description?: string; agentType?: string; requestShape?: string }
   launch?: { path: string; cmd: string; title?: string; bg: boolean }
   id?: string; parent?: string; kind?: string
-  desktop?: { id: string; kind: 'code' | 'work'; cwd?: string; parent?: string } | null
+  desktop?: { id: string; kind: 'code' | 'work'; cwd?: string; title?: string; parent?: string } | null
   requests?: number; turns?: number; cacheRead?: number; cacheWrite?: number; reasoning?: number; ctx?: number
   ctxWindow?: number; limitPct?: number; limitWindow?: number; branch?: string; tools?: [string, number][]; series?: number[]
 }
@@ -28,6 +28,8 @@ const tick = atom({ plugin: 'agent-radar', key: 'tick' } as const, 0)
 
 const CODEX = /(^|[\s;&|(])codex\s+(exec|e)\b/
 const ENDED = new Set(['completed', 'failed', 'killed'])
+// Minutes since its last activity a row still counts as current, in both scopes; "Finished" shows the rest.
+const ACTIVE_MIN = 15
 // ponytail: a fixed row budget (30 drew, 89 did not); pages or a "show more" if people want the old ones back.
 const MAX_ROWS = 40
 const EFF = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -153,7 +155,8 @@ async function pollProject($: $) {
   const list = await read($, agents)
   const extra = list.filter(a => a.rollout && !ENDED.has(a.status)).map(a => a.rollout!)
   const me = (await Promise.resolve().then(() => $.session.id()).catch(() => undefined)) || sessionId
-  const { codex, claude } = await scan($, 'codex:' + me, 5, extra)
+  const { codex, claude, title } = await scan($, 'codex:' + me, 5, extra)
+  if (title) await upsert($, 'main', { title })
   // Notifications that arrived before this load (a resume, a reload): read once from this session's journal.
   const told: Record<string, string> = !swept && list.some(openBg) ? ((await py($, ['ended', '0', journalOf(root, me)])) ?? {}) : {}
   swept = true
@@ -273,7 +276,7 @@ async function pollAll($: $) {
   const view = await read($, viewA)
   if (view.scope !== 'all') return
   lastAll = Date.now()
-  const mins = view.showDone ? 120 : 15
+  const mins = view.showDone ? 120 : ACTIVE_MIN
   // Every chat shows the same machine-wide list: a scan another chat made in the last few seconds, for the same
   // window, is reused from the shared store instead of read from disk again.
   const kept = (await $.store.get('allScan').catch(() => undefined)) as { at: number; mins: number; s: Scan } | undefined
@@ -428,7 +431,7 @@ export const register: Register = (on, options) => {
           a.id !== id ? a : {
             ...a, model: (u.model || e.model).replace(/^claude-/, ''), effort: typeof e.effort === 'string' ? e.effort : a.effort,
             tokIn: a.tokIn + u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens,
-            tokOut: a.tokOut + u.output_tokens,
+            tokOut: a.tokOut + u.output_tokens, stats: { ...a.stats, lastAt: Date.now() },
           })
       })
     }
@@ -486,12 +489,14 @@ export const register: Register = (on, options) => {
     // Hiding an agent hides everything it launched, so a hidden root takes its whole tree with it.
     const allById = new Map(all.map(a => [a.id, a]))
     const isHidden = (a?: Agent): boolean => !!a && (hidden.has(a.id) || isHidden(a.parentId ? allById.get(a.parentId) : undefined))
-    const list = all.filter(a => (view.showDone || !ENDED.has(a.status) || a.id === 'main') && !isHidden(a))
+    const now = Date.now()
+    // Current: running, or not ended and active within the window. A subagent left waiting since yesterday is not.
+    const current = (a: Agent) => a.status === 'running' || (!ENDED.has(a.status) && now - (a.stats?.lastAt ?? a.t1 ?? a.t0) < ACTIVE_MIN * 60e3)
+    const list = all.filter(a => (view.showDone || a.id === 'main' || current(a)) && !isHidden(a))
     const ctxOf = (a: Agent) => {
       const w = a.stats?.ctxWindow ?? (a.family === 'claude' ? claudeWindow : 0)
       return a.stats?.ctx && w ? Math.min(1, a.stats.ctx / w) : undefined
     }
-    const now = Date.now()
     const cols = e.props.bodyColumns ?? 100
     const web = e.surface !== 'terminal'
     // Narrowing steps: the launch column goes first, then effort shrinks to one square under a short header, and only

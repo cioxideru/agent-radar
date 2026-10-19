@@ -22,7 +22,7 @@ const en = {
   context: 'Context ', of: ' of ', ctxAlt: 'context fill',
   codexLimit: 'Codex limit ', weekWindow: ' of the weekly window', hWindow: (h: number) => ` of a ${h}h window`, limitAlt: 'Codex limit',
   activityTitle: 'Activity · output tokens over time', activityAlt: 'activity chart', tools: 'Tools',
-  scope: { proj: 'This project', all: 'All' }, finished: 'Finished', sumIn: 'In', sumOut: 'Out', sumTotal: 'Total', hidden: (n: number) => ` Hidden ${n}`,
+  scope: { proj: 'This session', all: 'All' }, finished: 'Finished', sumIn: 'In', sumOut: 'Out', sumTotal: 'Total', hidden: (n: number) => ` Hidden ${n}`,
   runningN: (n: number) => `${n} Work`, scanning: 'Scanning journals…', none: 'No agents yet.',
   moreRows: (n: number) => `${n} more finished, older ones not drawn`,
   handoffPrompt: (title: string, journal: string) =>
@@ -54,7 +54,7 @@ const ru: Strings = {
   context: 'Контекст ', of: ' из ', ctxAlt: 'заполнение контекста',
   codexLimit: 'Лимит Codex ', weekWindow: ' недельного окна', hWindow: h => ` окна ${h}ч`, limitAlt: 'лимит Codex',
   activityTitle: 'Активность · выходные токены по времени', activityAlt: 'график активности', tools: 'Инструменты',
-  scope: { proj: 'Этот проект', all: 'Все' }, finished: 'Завершённые', sumIn: 'Вход', sumOut: 'Выход', sumTotal: 'Всего', hidden: n => ` Скрытые ${n}`,
+  scope: { proj: 'Эта сессия', all: 'Все' }, finished: 'Завершённые', sumIn: 'Вход', sumOut: 'Выход', sumTotal: 'Всего', hidden: n => ` Скрытые ${n}`,
   runningN: n => `${n} в работе`, scanning: 'Сканирую журналы…', none: 'Агентов пока нет.',
   moreRows: n => `Ещё ${n} завершённых, старые не показаны`,
   handoffPrompt: (title, journal) =>
