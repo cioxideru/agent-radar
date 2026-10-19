@@ -28,6 +28,8 @@ const tick = atom({ plugin: 'agent-radar', key: 'tick' } as const, 0)
 
 const CODEX = /(^|[\s;&|(])codex\s+(exec|e)\b/
 const ENDED = new Set(['completed', 'failed', 'killed'])
+// ponytail: a fixed row budget (30 drew, 89 did not); pages or a "show more" if people want the old ones back.
+const MAX_ROWS = 40
 const EFF = ['low', 'medium', 'high', 'xhigh', 'max']
 // low → max: white, yellow, green, blue, purple.
 const EFF_COLOR = ['#e7e9ef', '#e8b23a', '#3fcf7f', '#5aa9e6', '#a98bf0']
@@ -454,13 +456,16 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   // The notification a background task sends when it ends; a codex run with no rollout of its own ends here.
+  // It runs on every row the session keeps, so it never holds the row up: the row goes on first, the mark follows.
   on('session.append', async ($, e, next) => {
     const r = await next(e)
-    const end = e.origin.kind === 'task-notification' && !e.agentId
-      ? taskEnded(e.message.content.map(b => ('text' in b && typeof b.text === 'string' ? b.text : '')).join('')) : undefined
-    if (end) await update($, agents, l => l.map(a => (a.id === 'cx:' + end.toolUseId && openBg(a) ? { ...a, status: end.status, t1: Date.now() } : a)))
+    try {
+      const end = e.origin?.kind === 'task-notification' && !e.agentId
+        ? taskEnded((e.message?.content ?? []).map(b => ('text' in b && typeof b.text === 'string' ? b.text : '')).join('')) : undefined
+      if (end) void update($, agents, l => l.map(a => (a.id === 'cx:' + end.toolUseId && openBg(a) ? { ...a, status: end.status, t1: Date.now() } : a))).catch(() => {})
+    } catch {}
     return r
-  }).catch(($, e, next) => next(e))
+  })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
@@ -506,7 +511,11 @@ export const register: Register = (on, options) => {
     // The counters double as switches, all on by default: one switched off leaves its agents out of the list.
     // The counts stay those of the whole list.
     const off = new Set(view.off ?? [])
-    const shown = list.filter(a => !off.has(a.family as 'claude' | 'codex') && (!view.runningOnly || a.status === 'running'))
+    const listed = list.filter(a => !off.has(a.family as 'claude' | 'codex') && (!view.runningOnly || a.status === 'running'))
+    // Claude Desktop draws nothing at all past a couple of thousand elements: past MAX_ROWS the oldest ended rows go.
+    const keep = new Set([...listed].sort((x, y) => +ENDED.has(x.status) - +ENDED.has(y.status) || (y.t1 ?? now) - (x.t1 ?? now))
+      .slice(0, MAX_ROWS).map(a => a.id))
+    const shown = listed.filter(a => keep.has(a.id) || a.id === 'main' || a.id === view.sel)
     const maxTok = Math.max(1, ...shown.map(a => a.tokIn + a.tokOut))
     // 'main' stands for this session: in "All" it is the scanned row carrying this session's id.
     const selId = view.sel === 'main' && view.scope === 'all' ? shown.find(a => a.family === 'claude' && a.sid === sessionId)?.id : view.sel
@@ -1011,6 +1020,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column">
           {!compact && head}
           {shown.length === 0 && <Box paddingX={1}><Text dimColor>{view.scope === 'all' ? t.scanning : t.none}</Text></Box>}
+          {shown.length < listed.length && <Box paddingX={1}><Text dimColor>{t.moreRows(listed.length - shown.length)}</Text></Box>}
           {view.scope === 'proj'
             ? rows(shown)
             : projects.flatMap(([g, p]) => [

@@ -174,3 +174,22 @@ test("this chat's own session title stands out on a tint", async ($, on) => {
   expect(await tint(/^Other chat row$/)).toBe(false)
   await ui.unmount()
 })
+
+test('a long list draws its newest rows and says how many older ones it left out', async ($, on) => {
+  const now = Date.now()
+  const old = Array.from({ length: 60 }, (_, i) => ({ id: 'cx:old' + i, parentId: 'main', project: 'Proj', title: 'Old run ' + i, model: 'gpt-6', family: 'codex', tokIn: 1, tokOut: 1, t0: now - 1e6, t1: now - i * 1e3, status: 'completed', how: 'codex exec' }))
+  on('state.set', { plugin: 'agent-radar', key: 'agents' } as never, (($: unknown, e: { value: unknown[] }, next: (e: unknown) => unknown) =>
+    next({ ...e, value: [...old, ...e.value.filter(a => !(a as { id: string }).id.startsWith('cx:old'))] })) as never)
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  // Any write of the list lays the sixty old runs in.
+  await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review' })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+    // Finished rows on: the switch is pressed once and stays for the second surface.
+    if (surface === 'desktop') await ui.press({ key: 'f-done' })
+    expect(await ui.find({ text: /Old run 0\b/ } as never)).toBeDefined()
+    expect(await ui.find({ text: /Old run 59\b/ } as never)).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^21 more finished/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
