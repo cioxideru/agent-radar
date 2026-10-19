@@ -1,5 +1,7 @@
-import json, os, sys, time, glob, datetime
+import json, os, re, sys, time, glob, datetime
 mode, mins, extra = sys.argv[1], float(sys.argv[2]), sys.argv[3:]
+# 'codex:<session id>' also reads the Desktop sessions that session started.
+mode, _, me = mode.partition(':')
 now = time.time()
 # Paths use / on every system, so the mod can split them the same way on Windows.
 H = os.path.expanduser('~').replace(os.sep, '/')
@@ -106,7 +108,9 @@ def claude(p, mt):
                 r['model'] = m.get('model') or r.get('model')
                 r['effort'] = d.get('effort') or r.get('effort')
                 r['entry'] = d.get('entrypoint') or r.get('entry')
-                r['cwd'] = d.get('cwd') or r.get('cwd')
+                # The folder the session started in: a later cd moves each line's cwd, not the session's project.
+                if d.get('cwd'):
+                    r.setdefault('cwd', d['cwd'])
                 r.setdefault('t0', d.get('timestamp'))
                 for b in m.get('content') if isinstance(m.get('content'), list) else []:
                     i = (b.get('input') or {}) if isinstance(b, dict) else {}
@@ -136,6 +140,39 @@ def claude(p, mt):
         r['meta'] = load(open(meta).read())
     return r
 
+# Background tasks this journal was told have ended, by the tool call that started them.
+if mode == 'ended':
+    done = {}
+    for p in extra:
+        for l in open(p, errors='replace'):
+            if '<task-notification>' not in l or '"type":"assistant"' in l:
+                continue
+            for n in re.findall(r'<task-notification>(.*?)</task-notification>', l):
+                u, st = re.search(r'<tool-use-id>(\w+)<', n), re.search(r'<status>(\w+)<', n)
+                if u and st:
+                    done[u.group(1)] = st.group(1)
+    print(json.dumps(done))
+    sys.exit()
+
+def desktop():
+    # Claude Desktop keeps one record per session: its own id (what claude:// links take), the CLI transcript id, the
+    # folder it was opened in and the session that started it.
+    A = {'darwin': H + '/Library/Application Support', 'win32': os.environ.get('APPDATA', '').replace(os.sep, '/')}.get(sys.platform, H + '/.config') + '/Claude/'
+    recs, cli = [], {}
+    for p in files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True):
+        d = load(open(p, errors='replace').read())
+        if d.get('cliSessionId'):
+            cli[d.get('sessionId')] = d['cliSessionId']
+            recs.append((d, 'code' if 'claude-code-sessions' in p else 'work'))
+    return {d['cliSessionId']: {'id': d.get('sessionId'), 'kind': k, 'cwd': d.get('cwd'), 'parent': cli.get((d.get('spawnedFrom') or {}).get('sessionId'))}
+            for d, k in recs if not d.get('isArchived')}
+
+def withDesk(r, desk):
+    r['desktop'] = desk.get(os.path.basename(r['path'].split('/subagents/')[0])[:36].replace('.jsonl', ''))
+    if r['desktop'] and r['desktop']['cwd'] and '/subagents/' not in r['path']:
+        r['cwd'] = r['desktop']['cwd']
+    return r
+
 launches = []
 out = {'codex': [], 'claude': []}
 days = {(datetime.date.today() - datetime.timedelta(days=i)).strftime('%Y/%m/%d') for i in (0, 1)}
@@ -154,18 +191,16 @@ for r in out['codex']:
     if names.get(r.get('id')):
         r['title'] = names[r['id']]
 if mode == 'all':
-    # Claude Desktop keeps one record per session: its own id (what claude:// links take) and the CLI transcript id.
-    A = {'darwin': H + '/Library/Application Support', 'win32': os.environ.get('APPDATA', '').replace(os.sep, '/')}.get(sys.platform, H + '/.config') + '/Claude/'
-    desk = {}
-    for p in files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True):
-        d = load(open(p, errors='replace').read())
-        if d.get('cliSessionId') and not d.get('isArchived'):
-            desk[d['cliSessionId']] = {'id': d.get('sessionId'), 'kind': 'code' if 'claude-code-sessions' in p else 'work'}
+    desk = desktop()
     cl = files(H + '/.claude/projects/*/*.jsonl') + files(H + '/.claude/projects/*/*/subagents/agent-*.jsonl')
     for p, mt in recent(cl).items():
-        r = claude(p, mt)
-        r['desktop'] = desk.get(os.path.basename(p.split('/subagents/')[0])[:36].replace('.jsonl', ''))
-        out['claude'].append(r)
+        out['claude'].append(withDesk(claude(p, mt), desk))
+elif me:
+    # ponytail: every child journal is read on each poll; an mtime cache if a session starts dozens of them.
+    desk = desktop()
+    for sid, d in desk.items():
+        for p in files(H + '/.claude/projects/*/' + sid + '.jsonl') if d['parent'] == me else []:
+            out['claude'].append(withDesk(claude(p, os.stat(p).st_mtime), desk))
 # A codex_exec rollout starts within two minutes of the Bash call that launched it.
 for r in out['codex']:
     t = iso(r.get('t0'))

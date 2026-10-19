@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from '../hooks/charts'
 
-import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, modelLabel, ordered, parseCodex, projectOf, ranNothing, shq } from '../hooks/register'
+import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, modelLabel, ordered, parseCodex, projectOf, ranNothing, shq, taskEnded } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -96,4 +96,16 @@ test('codex shells that never ran a turn are left out of all sessions', () => {
   expect(rows.map(r => r.id)).toEqual(['/c/real.jsonl'])
   expect(ranNothing({ model: '?', tokIn: 0, tokOut: 0 })).toBe(true)
   expect(ranNothing({ model: 'gpt-6', tokIn: 0, tokOut: 0 })).toBe(false)
+})
+
+test('a Desktop session started from another sits under it, and a task notification names the call that ended', () => {
+  const now = Date.now()
+  const rows = fromScan({ codex: [], claude: [
+    { path: '/p/Proj/aaa.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', title: 'Lead', desktop: { id: 'local_a', kind: 'code', cwd: '/x/Proj' } },
+    { path: '/p/Proj/bbb.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Other', title: 'Side', desktop: { id: 'local_b', kind: 'code', parent: 'aaa' } },
+  ] }, now)
+  expect(ordered(rows).map(r => r.guide + r.a.title)).toEqual(['Lead', '└─ Side'])
+  expect(taskEnded('<task-id>b1</task-id>\n<tool-use-id>toolu_01X</tool-use-id>\n<status>killed</status>')).toEqual({ toolUseId: 'toolu_01X', status: 'killed' })
+  expect(taskEnded('<tool-use-id>toolu_01X</tool-use-id><status>done</status>')!.status).toBe('completed')
+  expect(taskEnded('no notification here')).toBeUndefined()
 })
