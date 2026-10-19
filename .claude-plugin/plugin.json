@@ -1,6 +1,6 @@
 {
   "name": "agent-radar",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Live pane of running agents: Claude subagents and the Codex runs they launch, with model, effort, tokens, context, time and launch method",
   "author": { "name": "cioxideru", "url": "https://github.com/cioxideru" },
   "homepage": "https://github.com/cioxideru/agent-radar",
