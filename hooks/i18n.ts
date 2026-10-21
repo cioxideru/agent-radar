@@ -25,7 +25,7 @@ const en = {
   scope: { proj: 'This session', all: 'All' }, finished: 'Finished', sumIn: 'In', sumOut: 'Out', sumTotal: 'Total', hidden: (n: number) => ` Hidden ${n}`,
   runningN: (n: number) => `${n} Work`, scanning: 'Scanning journals…', none: 'No agents yet.',
   moreRows: (n: number) => `${n} more finished, older ones not drawn`,
-  shells: 'Background commands', shellsActive: (n: number) => `Active ${n}`, shellsAll: (n: number) => `All ${n}`, started: 'Started', took: 'Took',
+  shells: 'Background commands', shellsShort: 'Background', shellsActive: (n: number) => `Active ${n}`, shellsAll: (n: number) => `All ${n}`, started: 'Started', took: 'Took',
   handoffPrompt: (title: string, journal: string) =>
     `Continue the work from the session "${title}". Its journal: ${journal}\nRead the end of the journal, recover the task, what is done and what is left, summarize briefly and carry on.`,
 }
@@ -58,7 +58,7 @@ const ru: Strings = {
   scope: { proj: 'Эта сессия', all: 'Все' }, finished: 'Завершённые', sumIn: 'Вход', sumOut: 'Выход', sumTotal: 'Всего', hidden: n => ` Скрытые ${n}`,
   runningN: n => `${n} в работе`, scanning: 'Сканирую журналы…', none: 'Агентов пока нет.',
   moreRows: n => `Ещё ${n} завершённых, старые не показаны`,
-  shells: 'Фоновые команды', shellsActive: n => `Активные ${n}`, shellsAll: n => `Все ${n}`, started: 'Начата', took: 'Шла',
+  shells: 'Фоновые команды', shellsShort: 'Фоновые', shellsActive: n => `Активные ${n}`, shellsAll: n => `Все ${n}`, started: 'Начата', took: 'Шла',
   handoffPrompt: (title, journal) =>
     `Продолжи работу из сессии «${title}». Её журнал: ${journal}\nПрочитай конец журнала, восстанови задачу, что сделано и что осталось, коротко перескажи и продолжай.`,
 }

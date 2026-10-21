@@ -860,7 +860,7 @@ export const register: Register = (on, options) => {
         <Box key="sh-head" flexDirection="row" gap={1} alignItems="center" flexWrap="wrap" paddingX={1} marginTop={1}>
           <Button key="sh-fold" plain onPress={() => void update($, viewA, v => ({ ...v, shellsFolded: open }))}>
             {Svg ? <Text bold size="heading" color={C.muted}>{open ? '⏷' : '⏵'}</Text> : <Text bold color={C.muted}>{open ? 'ᐯ' : 'ᐳ'}</Text>}
-            <Text bold>{' ' + t.shells}</Text>
+            <Text bold>{' ' + (tight ? t.shellsShort : t.shells)}</Text>
           </Button>
           {pick('sh-active', !view.shellsAll, t.shellsActive(active.length), false)}
           {pick('sh-all', !!view.shellsAll, t.shellsAll(bgCmds.length), true)}
