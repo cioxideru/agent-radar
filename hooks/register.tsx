@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, Stats, View } from '../types'
+import type { Agent, Shell, Stats, View } from '../types'
 import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
@@ -25,8 +25,13 @@ const agents = atom({ plugin: 'agent-radar', key: 'agents' } as const, [] as Age
 const others = atom({ plugin: 'agent-radar', key: 'others' } as const, [] as Agent[])
 const viewA = atom({ plugin: 'agent-radar', key: 'view' } as const, { scope: 'proj', showDone: false } as View)
 const tick = atom({ plugin: 'agent-radar', key: 'tick' } as const, 0)
+const shells = atom({ plugin: 'agent-radar', key: 'shells' } as const, [] as Shell[])
 
 const CODEX = /(^|[\s;&|(])codex\s+(exec|e)\b/
+// A headless Claude run is an agent too, not a shell command to list.
+const CLAUDE_P = /(^|[\s;&|(])claude\s+(.*\s)?(-p|--print)\b/
+// ponytail: the newest few are kept; older ones go, ended or not.
+const MAX_SHELLS = 20
 const ENDED = new Set(['completed', 'failed', 'killed'])
 // Minutes since its last activity a row still counts as current, in both scopes; "Finished" shows the rest.
 const ACTIVE_MIN = 15
@@ -158,8 +163,12 @@ async function pollProject($: $) {
   const { codex, claude, title } = await scan($, 'codex:' + me, 5, extra)
   if (title) await upsert($, 'main', { title })
   // Notifications that arrived before this load (a resume, a reload): read once from this session's journal.
-  const told: Record<string, string> = !swept && list.some(openBg) ? ((await py($, ['ended', '0', journalOf(root, me)])) ?? {}) : {}
+  // Once a load: what this session's journal says ended while no hook was listening (a resume, a reload), and the
+  // background commands it ran before.
+  const past = swept ? undefined : ((await py($, ['ended', '0', journalOf(root, me)])) as Past | undefined)
   swept = true
+  const told = past?.done ?? {}
+  if (past) await update($, shells, l => pastShells(l, past))
   // Desktop sessions this one started sit under it, as Claude Desktop draws them.
   const kids = claude.map(r => ({ ...claudeRow(r, now), parentId: 'main' }))
   const byPath = new Map(codex.map(r => [r.path, r]))
@@ -221,6 +230,27 @@ const statsOf = (r: Rec): Stats => ({
   ctxWindow: r.ctxWindow, limitPct: r.limitPct, limitWindow: r.limitWindow, branch: r.branch, tools: r.tools, series: r.series,
   lastAt: r.mtime,
 })
+
+// Marks the listed background commands the session was told have ended, by their tool_use_id.
+const endShells = ($: $, told: Record<string, string>) =>
+  update($, shells, l => l.map(s => (!ENDED.has(s.status) && told[s.id] ? { ...s, status: endStatus(told[s.id]!), t1: Date.now() } : s)))
+
+type Past = { done: Record<string, string>; at: Record<string, string>; bg: { id: string; cmd: string; title?: string; ts?: string; timeout?: number }[] }
+// An agent launch is listed too, under its family's mark.
+export const kindOf = (cmd: string): Shell['kind'] => (CODEX.test(cmd) ? 'codex' : CLAUDE_P.test(cmd) ? 'claude' : undefined)
+// The list as the journal tells it: commands it ran that are not listed yet, each ended where it was told so.
+export function pastShells(list: Shell[], past: Past): Shell[] {
+  const when = (ts?: string) => (ts ? Date.parse(ts) : Date.now())
+  const known = new Set(list.map(s => s.id))
+  const added = past.bg.filter(b => !known.has(b.id)).map((b): Shell => ({
+    id: b.id, cmd: b.cmd, title: b.title, t0: when(b.ts), status: 'running',
+    ...(b.timeout ? { until: when(b.ts) + b.timeout, kind: 'monitor' as const } : { kind: kindOf(b.cmd) }),
+  }))
+  return [...list, ...added].sort((x, y) => x.t0 - y.t0).slice(-MAX_SHELLS).map(s =>
+    !ENDED.has(s.status) && past.done[s.id] ? { ...s, status: endStatus(past.done[s.id]!), t1: when(past.at[s.id]) } : s)
+}
+// ponytail: a Monitor whose command exits early still reads as running until its deadline; nothing tells of the exit.
+export const shellNow = (s: Shell, now: number): Shell => (s.until && !ENDED.has(s.status) && now > s.until ? { ...s, status: 'completed', t1: s.until } : s)
 
 function recToCodex(r: Rec, now: number): Agent {
   const t0 = r.t0 ? Date.parse(r.t0) : r.mtime
@@ -439,22 +469,34 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const cmd = e.command
-    if (!CODEX.test(cmd)) return next(e)
-    const id = 'cx:' + e.tool_use_id
-    const bg = !!e.run_in_background
+    const cmd = e.command, bg = !!e.run_in_background, codex = CODEX.test(cmd)
+    if (!bg && !codex) return next(e)
+    const id = 'cx:' + e.tool_use_id, sid = e.tool_use_id
+    // Every background command is listed with the others, an agent launch under its family's mark.
+    if (bg) await update($, shells, l => [...l, { id: sid, cmd, title: e.description, t0: Date.now(), status: 'running', kind: kindOf(cmd) }].slice(-MAX_SHELLS))
     const p = parseCodex(cmd)
-    await upsert($, id, {}, {
+    if (codex) await upsert($, id, {}, {
       id, parentId: e.agentId ?? 'main', project: projectOf(root), title: e.description || p.prompt || 'codex exec',
       model: p.model ?? 'codex', family: 'codex', effort: p.effort, tokIn: 0, tokOut: 0, t0: Date.now(),
       status: 'running', how: bg ? 'codex exec · ' + t.bg : 'codex exec', cmd, cwd: root,
     })
     const r = await next(e)
-    if (!bg) await upsert($, id, { status: r.deny || r.isError ? 'failed' : 'completed', t1: Date.now() })
-    else {
-      const taskId = (r.result as { backgroundTaskId?: string } | undefined)?.backgroundTaskId
-      if (taskId) await upsert($, id, { taskId })
-    }
+    const failed = !!(r.deny || r.isError)
+    const taskId = (r.result as { backgroundTaskId?: string } | undefined)?.backgroundTaskId
+    if (bg) await update($, shells, l => l.map(s => (s.id !== sid ? s : failed ? { ...s, status: 'failed', t1: Date.now() } : { ...s, taskId })))
+    if (codex && !bg) await upsert($, id, { status: failed ? 'failed' : 'completed', t1: Date.now() })
+    else if (codex && taskId) await upsert($, id, { taskId })
+    return r
+  }).catch(($, e, next) => next(e))
+
+  // A Monitor is a background watch: it sits with the background commands until its deadline.
+  on('tool.call', { tool: 'Monitor' }, async ($, e, next) => {
+    if (!e.command) return next(e)
+    const id = e.tool_use_id, t0 = Date.now()
+    await update($, shells, l => [...l, { id, cmd: e.command!, title: e.description, t0, status: 'running', kind: 'monitor' as const, until: t0 + Math.min(e.timeout_ms || 300000, 1800000) }].slice(-MAX_SHELLS))
+    const r = await next(e)
+    const taskId = (r.result as { taskId?: string } | undefined)?.taskId
+    await update($, shells, l => l.map(s => (s.id !== id ? s : r.deny || r.isError ? { ...s, status: 'failed', t1: Date.now() } : { ...s, taskId })))
     return r
   }).catch(($, e, next) => next(e))
 
@@ -463,9 +505,10 @@ export const register: Register = (on, options) => {
   on('session.append', async ($, e, next) => {
     const r = await next(e)
     try {
-      const end = e.origin?.kind === 'task-notification' && !e.agentId
+      const end = e.origin?.kind === 'task-notification'
         ? taskEnded((e.message?.content ?? []).map(b => ('text' in b && typeof b.text === 'string' ? b.text : '')).join('')) : undefined
       if (end) void update($, agents, l => l.map(a => (a.id === 'cx:' + end.toolUseId && openBg(a) ? { ...a, status: end.status, t1: Date.now() } : a))).catch(() => {})
+      if (end) void endShells($, { [end.toolUseId]: end.status }).catch(() => {})
     } catch {}
     return r
   })
@@ -477,6 +520,7 @@ export const register: Register = (on, options) => {
     const Svg = 'Svg' in els ? els.Svg : undefined
     const view = await read($, viewA)
     await read($, tick)
+    const bgCmds = view.scope === 'proj' ? (await read($, shells)).map(s => shellNow(s, Date.now())) : []
     const mine = await read($, agents)
     const all = view.scope === 'proj' ? mine : await read($, others)
     // This chat's own session, marked in both scopes: its row here, and its journal's row among all sessions.
@@ -796,6 +840,66 @@ export const register: Register = (on, options) => {
         <Text color={primary ? undefined : color}>{icon}</Text>{' ' + word}
       </Button>
     )
+    // This session's background shell commands: a folded section under the agents, each command opening its own
+    // details. Newest first; the command line is all there is to tell them apart when Claude gave no description.
+    // An agent launch carries its family's mark, as in the rows above; a watch and a plain command a glyph.
+    const kindMark = (s: Shell) => s.kind === 'codex' || s.kind === 'claude'
+      ? (Svg ? <Svg source={ICONS[s.kind]!} alt={s.kind} width={16} height={16} /> : <Text color={C[s.kind]}>{s.kind === 'codex' ? '◆' : '✳'}</Text>)
+      : <Text color={C.muted}>{s.kind === 'monitor' ? '◎' : '❯'}</Text>
+    const shellRows = () => {
+      if (!bgCmds.length) return []
+      const active = bgCmds.filter(s => !ENDED.has(s.status))
+      const open = !view.shellsFolded
+      // A choice of two like the scope above, the running commands by default.
+      const pick = (key: string, chosen: boolean, label: string, all: boolean) => (
+        <Button key={key} variant={chosen ? 'primary' : undefined} onPress={() => void update($, viewA, v => ({ ...v, shellsAll: all, shellsFolded: false }))}>
+          {(chosen ? '◉ ' : '○ ') + label}
+        </Button>
+      )
+      const out = [
+        <Box key="sh-head" flexDirection="row" gap={1} alignItems="center" flexWrap="wrap" paddingX={1} marginTop={1}>
+          <Button key="sh-fold" plain onPress={() => void update($, viewA, v => ({ ...v, shellsFolded: open }))}>
+            {Svg ? <Text bold size="heading" color={C.muted}>{open ? '⏷' : '⏵'}</Text> : <Text bold color={C.muted}>{open ? 'ᐯ' : 'ᐳ'}</Text>}
+            <Text bold>{' ' + t.shells}</Text>
+          </Button>
+          {pick('sh-active', !view.shellsAll, t.shellsActive(active.length), false)}
+          {pick('sh-all', !!view.shellsAll, t.shellsAll(bgCmds.length), true)}
+        </Box>,
+      ]
+      if (!open) return out
+      for (const s of [...(view.shellsAll ? bgCmds : active)].reverse()) {
+        const isOpen = view.shellSel === s.id
+        out.push(
+          <Box key={'sh-' + s.id} flexDirection="row" paddingX={1} backgroundColor={isOpen ? SOFT.sel : undefined}>
+            <Box width={2} flexShrink={0}><Text color={C[s.status] ?? C.muted}>●</Text></Box>
+            <Box width={3} flexShrink={0}>{kindMark(s)}</Box>
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              <Button key={'shb-' + s.id} plain onPress={() => void update($, viewA, v => ({ ...v, shellSel: isOpen ? undefined : s.id, confirm: undefined }))}>
+                <Text wrap="truncate-end">{s.title || s.cmd.split('\n')[0]!}</Text>
+              </Button>
+            </Box>
+            <Box width={W.time} flexShrink={0} justifyContent="flex-end"><Text mono dimColor>{fmtT((s.t1 ?? now) - s.t0)}</Text></Box>
+          </Box>,
+        )
+        if (isOpen) out.push(
+          <Box key={'shd-' + s.id} flexDirection="column" gap={1} paddingX={2} paddingY={1} marginX={1} borderStyle="round" borderColor={C.rail}>
+            <Text color={C[s.status] ?? C.muted}>{t.status[s.status] ?? s.status}</Text>
+            <Box flexDirection="row" flexWrap="wrap">
+              {field(t.started, ago(s.t0))}
+              {field(t.took, fmtT((s.t1 ?? now) - s.t0))}
+            </Box>
+            <Text mono wrap="wrap">{s.cmd.slice(0, 2000)}</Text>
+            <Box flexDirection="row" flexWrap="wrap" gap={1}>
+              {s.taskId && !ENDED.has(s.status) && (view.confirm === 'sh:' + s.id
+                ? btn('sh-stop-yes', '■', t.btn.sure, C.failed!, () => tool({ tool: 'TaskStop', task_id: s.taskId! }, t.stopped), true)
+                : btn('sh-stop', '■', t.btn.stop, C.failed!, () => void update($, viewA, v => ({ ...v, confirm: 'sh:' + s.id, note: t.confirmStop }))))}
+              {btn('sh-cmd', '⧉', t.btn.cmd, C.muted!, () => copy(s.cmd, t.launchWhat))}
+            </Box>
+          </Box>,
+        )
+      }
+      return out
+    }
     const actions = (a: Agent) => {
       const mine = view.scope === 'proj'
       const sub = mine && a.family === 'claude' && a.id !== 'main' && !scanned(a)
@@ -1027,7 +1131,7 @@ export const register: Register = (on, options) => {
           {shown.length === 0 && <Box paddingX={1}><Text dimColor>{view.scope === 'all' ? t.scanning : t.none}</Text></Box>}
           {shown.length < listed.length && <Box paddingX={1}><Text dimColor>{t.moreRows(listed.length - shown.length)}</Text></Box>}
           {view.scope === 'proj'
-            ? rows(shown)
+            ? [...rows(shown), ...shellRows()]
             : projects.flatMap(([g, p]) => [
                 <Box key={'p' + p} flexDirection="row" gap={1} alignItems="center" paddingX={1} marginTop={1}>
                   {/* The surface's own text color: darker than the muted gray on a light pane, lighter on a dark one. */}

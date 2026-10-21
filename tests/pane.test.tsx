@@ -100,6 +100,8 @@ test('hiding a root hides its whole tree, and a root folds and unfolds', async (
   await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true, agentId: 'A1' } as never)
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+    // The run is listed among the background commands too: that section folded, the agent rows alone are read.
+    if (surface === 'desktop') await ui.press({ key: 'sh-fold' })
     // The fold toggle, by its key ('v' and the root's id): its glyph differs between surfaces and states.
     const foldKey = ((await ui.findAll({ type: 'Button' } as never)) as { key?: string }[]).find(b => /^v[A-Z]/.test(b.key ?? ''))!.key!
     await ui.press({ key: foldKey })
@@ -211,4 +213,27 @@ test('a subagent quiet past the activity window waits for Finished, as among all
   await ui.press({ key: 'f-done' })
   expect(await ui.find({ text: /Quiet since yesterday/ } as never)).toBeDefined()
   await ui.unmount()
+})
+
+test('background commands list the running ones by default, agent launches under their mark, each opening its details', async ($, on) => {
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bgB1' } }) as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build -- --watch', description: 'Watch the build', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'claude -p "summarize the log"', description: 'Headless summary', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'ls -la', description: 'List files' })
+  await $.tool.call({ tool: 'Monitor', command: 'tail -f server.log | grep ERROR', description: 'Errors in the server log', timeout_ms: 60000 } as never)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+    expect(await ui.find({ text: /Active 3/ } as never)).toBeDefined()
+    expect(await ui.find({ text: /Watch the build/ } as never)).toBeDefined()
+    expect(await ui.find({ text: /Headless summary/ } as never)).toBeDefined()
+    expect(await ui.find({ text: /Errors in the server log/ } as never)).toBeDefined()
+    expect(await ui.find({ text: /List files/ } as never)).toBeUndefined()
+    if (surface === 'desktop') expect(await ui.find({ type: 'Svg', alt: 'claude' } as never)).toBeDefined()
+    const row = await ui.find({ type: 'Button', text: /Watch the build/ } as never)
+    await ui.press({ key: (row as { key: string }).key })
+    expect(await ui.find({ text: /npm run build -- --watch/ } as never)).toBeDefined()
+    expect(await ui.find({ type: 'Button', text: /Stop/ } as never)).toBeDefined()
+    await ui.press({ key: (row as { key: string }).key })
+    await ui.unmount()
+  }
 })

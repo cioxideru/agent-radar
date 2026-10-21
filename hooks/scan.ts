@@ -142,18 +142,32 @@ def claude(p, mt):
         r['meta'] = load(open(meta).read())
     return r
 
-# Background tasks this journal was told have ended, by the tool call that started them.
+# Background tasks this journal was told have ended, by the tool call that started them, and the background shell
+# commands it ran (newest last), so a load picks up what ran before it.
 if mode == 'ended':
-    done = {}
-    for p in extra:
+    done, at, bg = {}, {}, []
+    # The session's own journal and its subagents': a subagent's background commands are the session's too.
+    for p in [q for j in extra for q in [j] + files(j[:-6] + '/subagents/agent-*.jsonl')]:
         for l in open(p, errors='replace'):
+            if ('"run_in_background":true' in l or '"name":"Monitor"' in l) and '"type":"assistant"' in l:
+                d = load(l)
+                for b in (d.get('message') or {}).get('content') or []:
+                    if not (isinstance(b, dict) and b.get('type') == 'tool_use' and isinstance(b.get('input'), dict)):
+                        continue
+                    i = b['input']
+                    if b.get('name') == 'Bash' and i.get('run_in_background') and i.get('command'):
+                        bg.append({'id': b.get('id'), 'cmd': i['command'], 'title': i.get('description'), 'ts': d.get('timestamp')})
+                    elif b.get('name') == 'Monitor' and i.get('command'):
+                        bg.append({'id': b.get('id'), 'cmd': i['command'], 'title': i.get('description'), 'ts': d.get('timestamp'),
+                                   'timeout': min(int(i.get('timeout_ms') or 300000), 1800000)})
             if '<task-notification>' not in l or '"type":"assistant"' in l:
                 continue
             for n in re.findall(r'<task-notification>(.*?)</task-notification>', l):
                 u, st = re.search(r'<tool-use-id>(\w+)<', n), re.search(r'<status>(\w+)<', n)
                 if u and st:
                     done[u.group(1)] = st.group(1)
-    print(json.dumps(done))
+                    at[u.group(1)] = load(l).get('timestamp')
+    print(json.dumps({'done': done, 'at': at, 'bg': bg}))
     sys.exit()
 
 def desktop():

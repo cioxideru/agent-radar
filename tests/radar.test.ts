@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from '../hooks/charts'
 
-import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, modelLabel, ordered, parseCodex, projectOf, ranNothing, shq, taskEnded } from '../hooks/register'
+import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, modelLabel, ordered, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -108,4 +108,23 @@ test('a Desktop session started from another sits under it, and a task notificat
   expect(taskEnded('<task-id>b1</task-id>\n<tool-use-id>toolu_01X</tool-use-id>\n<status>killed</status>')).toEqual({ toolUseId: 'toolu_01X', status: 'killed' })
   expect(taskEnded('<tool-use-id>toolu_01X</tool-use-id><status>done</status>')!.status).toBe('completed')
   expect(taskEnded('no notification here')).toBeUndefined()
+})
+
+test('a load picks up the background commands the journal ran, agent launches by family, ended where told', () => {
+  const past = {
+    done: { tu1: 'completed' }, at: { tu1: '2026-01-02T10:05:00Z' },
+    bg: [
+      { id: 'tu1', cmd: 'npm run build', title: 'Build', ts: '2026-01-02T10:00:00Z' },
+      { id: 'tu2', cmd: 'codex exec "review"', ts: '2026-01-02T10:01:00Z' },
+      { id: 'tu3', cmd: 'claude -p "sum up"', ts: '2026-01-02T10:02:00Z' },
+      { id: 'tu4', cmd: 'tail -f server.log', ts: '2026-01-02T10:03:00Z' },
+      { id: 'tu5', cmd: 'until [ -f done ]; do sleep 5; done', ts: '2026-01-02T10:04:00Z', timeout: 60000 },
+    ],
+  }
+  const l = pastShells([{ id: 'tu4', cmd: 'tail -f server.log', t0: 1, status: 'running', taskId: 'b4' }], past)
+  expect(l.map(s => [s.id, s.status, s.kind])).toEqual([
+    ['tu4', 'running', undefined], ['tu1', 'completed', undefined], ['tu2', 'running', 'codex'], ['tu3', 'running', 'claude'], ['tu5', 'running', 'monitor'],
+  ])
+  expect(l[1]!.t1).toBe(Date.parse('2026-01-02T10:05:00Z'))
+  expect(l[4]!.until).toBe(Date.parse('2026-01-02T10:04:00Z') + 60000)
 })
