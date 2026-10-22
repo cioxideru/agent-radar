@@ -236,4 +236,13 @@ test('background commands list the running ones by default, agent launches under
     await ui.press({ key: (row as { key: string }).key })
     await ui.unmount()
   }
+  // Stopped after the confirming press: it leaves the running ones at once, with no notice of its end to wait for.
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  const press = async (text: RegExp) => ui.press({ key: ((await ui.find({ type: 'Button', text } as never)) as { key: string }).key })
+  await press(/Watch the build/)
+  await press(/Stop/)
+  await press(/Sure\?/)
+  expect(await ui.find({ text: /Active 2/ } as never)).toBeDefined()
+  expect(await ui.find({ text: /Watch the build/ } as never)).toBeUndefined()
+  await ui.unmount()
 })

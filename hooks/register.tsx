@@ -826,8 +826,13 @@ export const register: Register = (on, options) => {
     const say = (note: string) => update($, viewA, v => ({ ...v, note, confirm: undefined }))
     const run = (argv: string[], done: string) =>
       void $.process.run(argv).then(r => say(r.exitCode === 0 ? done : t.failed + (r.stderr || r.exitCode).toString().slice(0, 200)), () => say(t.cannotRun + argv[0]))
-    const tool = (args: Parameters<typeof $.tool.call>[0], done: string) =>
-      void $.tool.call(args).then(r => say('deny' in r && r.deny ? t.denied + r.deny : done), err => say(t.failed + String(err).slice(0, 200)))
+    // A refused or failed call says why; one that went through runs `then` too.
+    const tool = (args: Parameters<typeof $.tool.call>[0], done: string, then?: () => Promise<unknown>) =>
+      void $.tool.call(args).then(r => {
+        if ('deny' in r && r.deny) return say(t.denied + r.deny)
+        if ('isError' in r && r.isError) return say(t.failed + String(('text' in r && r.text) || '').slice(0, 200))
+        return Promise.resolve(then?.()).then(() => say(done))
+      }, err => say(t.failed + String(err).slice(0, 200)))
     const copy = (text: string, what: string) =>
       void $.ui.copy({ text, surface: e.surface }).then(r => say(r.isCopied ? t.copied(what) : t.noClipboard))
     // Terminal.app on macOS; elsewhere terminals differ too much to drive, so the command goes to the clipboard.
@@ -891,7 +896,9 @@ export const register: Register = (on, options) => {
             <Text mono wrap="wrap">{s.cmd.slice(0, 2000)}</Text>
             <Box flexDirection="row" flexWrap="wrap" gap={1}>
               {s.taskId && !ENDED.has(s.status) && (view.confirm === 'sh:' + s.id
-                ? btn('sh-stop-yes', '■', t.btn.sure, C.failed!, () => tool({ tool: 'TaskStop', task_id: s.taskId! }, t.stopped), true)
+                ? btn('sh-stop-yes', '■', t.btn.sure, C.failed!, () => tool({ tool: 'TaskStop', task_id: s.taskId! }, t.stopped,
+                  // A stopped watch sends no notice of its end: marked here once the stop went through.
+                  () => update($, shells, l => l.map(x => (x.id === s.id ? { ...x, status: 'killed', t1: Date.now() } : x)))), true)
                 : btn('sh-stop', '■', t.btn.stop, C.failed!, () => void update($, viewA, v => ({ ...v, confirm: 'sh:' + s.id, note: t.confirmStop }))))}
               {btn('sh-cmd', '⧉', t.btn.cmd, C.muted!, () => copy(s.cmd, t.launchWhat))}
             </Box>
