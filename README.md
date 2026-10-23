@@ -112,7 +112,7 @@ There is no server and no network access. The mod runs inside Claude Code and re
 | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `~/.codex/session_index.jsonl` | Codex runs: model, effort, tokens, context, rate limits, titles |
 | `~/Library/Application Support/Claude/claude-code-sessions` (`%APPDATA%\Claude` on Windows) | which sessions belong to Claude Desktop, for the *open chat* link |
 
-A small Python scanner (`scan.py`, embedded in `hooks/scan.ts`) reads the journals every 3 s for this session and every 10 s for all sessions, only while the pane is open; chats share one *All* scan through the mod's store instead of each reading the same journals.
+A small Python scanner (`scan.py`, embedded in `hooks/scan.ts`) reads the journals every 3 s for this session and every 10 s for all sessions, only while the pane is open; a journal unchanged since the last scan is not read again, and chats share one *All* scan through the mod's store instead of each reading the same journals. A quiet session whose subagent still works is read along with it, so the subagent is drawn under it and never as a root of its own.
 
 ## Development
 

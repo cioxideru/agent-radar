@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from '../hooks/charts'
 
-import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, modelLabel, ordered, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded } from '../hooks/register'
+import type { Agent, Shell } from '../types'
+import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, ordered, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, trimShells } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -127,4 +128,50 @@ test('a load picks up the background commands the journal ran, agent launches by
   ])
   expect(l[1]!.t1).toBe(Date.parse('2026-01-02T10:05:00Z'))
   expect(l[4]!.until).toBe(Date.parse('2026-01-02T10:04:00Z') + 60000)
+})
+
+test('a nested subagent sits under the agent that spawned it, and a trailing slash is no project name', () => {
+  const now = Date.now()
+  const rows = fromScan({ codex: [], claude: [
+    { path: '/p/s.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj/', title: 'Lead' },
+    { path: '/p/s/subagents/agent-a1.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', meta: { description: 'Outer' } },
+    { path: '/p/s/subagents/agent-a2.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', meta: { description: 'Inner', parentAgentId: 'a1' } },
+  ] }, now)
+  expect(ordered(rows).map(r => r.guide + r.a.title)).toEqual(['Lead', '└─ Outer', '   └─ Inner'])
+  expect(rows[0]!.project).toBe('Proj')
+  expect(projectOf('/a/orbit-shop/')).toBe('orbit-shop')
+})
+
+test("this session's poll: a child thread under the run launched here, a child session's run under it, a stranger only while it runs", () => {
+  const now = Date.parse('2026-10-16T12:00:00Z')
+  const at = (ms: number) => new Date(now - ms).toISOString()
+  const cx: Agent = { id: 'cx:tu1', parentId: 'main', project: 'Proj', title: 'Review', model: 'codex', family: 'codex', tokIn: 0, tokOut: 0, t0: now - 60e3, status: 'running', how: 'codex exec · bg' }
+  // A child thread listed on an earlier poll, before the run here had paired with its rollout.
+  const early: Agent = { id: '/c/child.jsonl', parentId: '/c/run.jsonl', project: 'Proj', title: 'Auto-review', model: 'gpt-6', family: 'codex', tokIn: 1, tokOut: 1, t0: now - 40e3, status: 'running', how: 'Codex · review', rollout: '/c/child.jsonl' }
+  const kid: Agent = { id: '/p/kid.jsonl', parentId: 'main', project: 'Other', title: 'Side', model: 'opus', family: 'claude', tokIn: 1, tokOut: 1, t0: now - 300e3, status: 'running', how: 'Claude Desktop', journal: '/p/kid.jsonl' }
+  const s = { claude: [], codex: [
+    { path: '/c/run.jsonl', id: 'T1', mtime: now, tokIn: 5, tokOut: 2, cwd: '/x/Proj', t0: at(50e3), originator: 'codex_exec', model: 'gpt-6' },
+    { path: '/c/child.jsonl', id: 'T2', parent: 'T1', kind: 'guardian_review', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: at(40e3), originator: 'codex_exec', model: 'gpt-6' },
+    { path: '/c/kidrun.jsonl', id: 'T3', mtime: now - 600e3, tokIn: 1, tokOut: 1, cwd: '/x/Other', t0: at(700e3), originator: 'codex_exec', model: 'gpt-6', started: 1, done: 1, launch: { path: '/p/kid.jsonl', cmd: 'codex exec z', title: 'Kid review', bg: false } },
+    { path: '/c/stranger.jsonl', id: 'T4', mtime: now - 600e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: at(700e3), originator: 'Codex Desktop', model: 'gpt-6', started: 1, done: 1 },
+    { path: '/c/idle.jsonl', id: 'T5', mtime: now - 120e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: at(700e3), originator: 'Codex Desktop', model: 'gpt-6' },
+  ] }
+  const out = mergeProject([cx, early], s, [kid], new Map(), {}, now)
+  const by = (id: string) => out.find(a => a.id === id)!
+  expect(by('cx:tu1').rollout).toBe('/c/run.jsonl')
+  expect(by('/c/child.jsonl').parentId).toBe('cx:tu1')
+  expect([by('/c/kidrun.jsonl').parentId, by('/c/kidrun.jsonl').title, by('/c/kidrun.jsonl').status, by('/c/kidrun.jsonl').project]).toEqual(['/p/kid.jsonl', 'Kid review', 'completed', 'Other'])
+  expect(out.find(a => a.id === '/c/stranger.jsonl')).toBeUndefined()
+  expect([by('/c/idle.jsonl').status, by('/c/idle.jsonl').t1]).toEqual(['idle', now - 120e3])
+  expect(out[out.length - 1]!.id).toBe('/p/kid.jsonl')
+  // The same scan again adds nothing twice.
+  expect(mergeProject(out, s, [kid], new Map(), {}, now).map(a => a.id)).toEqual(out.map(a => a.id))
+})
+
+test('past the budget the oldest ended commands go first; running ones stay', () => {
+  const l = Array.from({ length: 23 }, (_, i): Shell => ({ id: 's' + i, cmd: 'c', t0: i, status: i % 2 ? 'completed' : 'running' }))
+  const out = trimShells(l)
+  expect(out).toHaveLength(20)
+  expect(out.filter(s => s.status === 'running')).toHaveLength(12)
+  expect(out.map(s => s.id).slice(0, 3)).toEqual(['s0', 's2', 's4'])
 })

@@ -13,9 +13,9 @@ Guide for AI coding agents and contributors working on Agent Radar, a Claude Cod
 | `hooks/i18n.ts` | every user-visible string, `en` and `ru`; `Strings` is the English shape |
 | `hooks/charts.ts` | SVG builders for the token stack bar, meters, the sparkline and the project pills; our own Claude and Codex marks |
 | `hooks/scan.ts` | `scan.py` embedded as a string — generated, do not edit by hand |
-| `scan.py` | journal scanner run with `python3 -I -c` (`python` on Windows); paths come out with `/` on every system; prints `{codex: [...], claude: [...]}` as JSON |
+| `scan.py` | journal scanner run with `python3 -I -c` (`python` on Windows); paths come out with `/` on every system; prints `{codex: [...], claude: [...]}` as JSON. The previous scan comes in on stdin: a journal unchanged since (same mtime and size) is taken from it unread. Quiet parents of active rows are read too (a session for its subagent, an agent for a nested one, a Codex thread for its child), so no child is drawn as a root |
 | `types/index.d.ts` | `Agent`, `Stats`, `View` and the `PluginState['agent-radar']` contract |
-| `tests/` | `radar.test.ts` (pure helpers), `pane.test.tsx` (mounted pane on terminal and desktop) |
+| `tests/` | `radar.test.ts` (pure helpers), `pane.test.tsx` (mounted pane on terminal and desktop), `scan_test.py` (the scanner on fictional journals in a temporary home) |
 | `docs/screenshots/` | README images, made from fictional data |
 
 `.claude-plugin/types/` is written by the engine when the mod loads and is git-ignored.
@@ -36,7 +36,7 @@ While developing, load the working copy instead: `claude --plugin-dir .`, then `
 
 ## Checks
 
-Run all three before a commit:
+Run all four before a commit:
 
 ```bash
 claude plugin validate .
@@ -48,6 +48,10 @@ claude plugin test .
 
 ```bash
 npx -y -p typescript@5.6.3 tsc -p tsconfig.json
+```
+
+```bash
+python3 -I tests/scan_test.py
 ```
 
 `tsc` needs `.claude-plugin/types/`, which appears after the mod has been loaded once (`claude --plugin-dir .`).

@@ -9,10 +9,13 @@ import { SCAN_PY } from './scan'
 type $ = EngineInterface
 type Scan = { codex: Rec[]; claude: Rec[]; title?: string }
 type Rec = {
-  path: string; mtime: number; tokIn: number; tokOut: number; cwd?: string; t0?: string
+  path: string; mtime: number; size?: number; tokIn: number; tokOut: number; cwd?: string; t0?: string
   model?: string; effort?: string; title?: string
   originator?: string; started?: number; done?: number
-  entry?: string; meta?: { description?: string; agentType?: string; requestShape?: string }
+  // A subagent's record beside its journal; `parentAgentId` when another agent spawned it, not the session.
+  entry?: string; meta?: { description?: string; agentType?: string; requestShape?: string; parentAgentId?: string } | null
+  // The `codex exec` calls a Claude journal made: the scanner's own, carried so a cached journal still pairs its runs.
+  launches?: unknown[]
   launch?: { path: string; cmd: string; title?: string; bg: boolean }
   id?: string; parent?: string; kind?: string
   desktop?: { id: string; kind: 'code' | 'work'; cwd?: string; title?: string; parent?: string } | null
@@ -30,7 +33,7 @@ const shells = atom({ plugin: 'agent-radar', key: 'shells' } as const, [] as She
 const CODEX = /(^|[\s;&|(])codex\s+(exec|e)\b/
 // A headless Claude run is an agent too, not a shell command to list.
 const CLAUDE_P = /(^|[\s;&|(])claude\s+(.*\s)?(-p|--print)\b/
-// ponytail: the newest few are kept; older ones go, ended or not.
+// ponytail: the newest few are kept; past the budget the oldest ended ones go first, then running ones.
 const MAX_SHELLS = 20
 const ENDED = new Set(['completed', 'failed', 'killed'])
 // Minutes since its last activity a row still counts as current, in both scopes; "Finished" shows the rest.
@@ -79,6 +82,9 @@ let compactAt = 0
 // One poll at a time; the all-sessions scan re-reads every active journal, so it runs at most every 10 s.
 let polling = false
 let lastAll = 0
+let allRun: Promise<void> | undefined
+// The last scan of this session's own: its rows seed the next, so a journal unchanged since is not read again.
+let lastProj: Scan | undefined
 // Whether this load has looked in its journal for background Codex runs that ended while no hook was listening.
 let swept = false
 
@@ -93,7 +99,9 @@ export const handoffUrl = (cwd: string, title: string, journal: string) =>
 export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 export const asq = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
-export const projectOf = (cwd = '') => cwd.replace(/[\\/]\.(claude|codex)[\\/]worktrees[\\/].*$/, '').split(/[\\/]/).pop() || cwd
+// A folder's last name, through a worktree to its project; a trailing separator (some journals write one) is not a name.
+export const projectOf = (cwd = '') =>
+  cwd.replace(/[\\/]+$/, '').replace(/[\\/]\.(claude|codex)[\\/]worktrees[\\/].*$/, '').split(/[\\/]/).pop() || cwd
 // A model as the rows show it: Codex's own models without the repeated "codex-" (codex-auto-review → auto-review), so
 // the narrow model column is not spent on an ellipsis. The details keep the full name.
 export const modelLabel = (m = '') => m.replace(/^codex-/, '')
@@ -131,13 +139,14 @@ const blank = (id: string, now: number): Agent => ({
   model: '', family: 'claude', tokIn: 0, tokOut: 0, t0: now, status: 'running', how: 'Agent',
 })
 
-async function py($: $, args: string[]) {
-  const r = await $.process.run([os === 'win' ? 'python' : 'python3', '-I', '-c', SCAN_PY, ...args], { timeoutMs: 20000 })
+async function py($: $, args: string[], stdin = '{}') {
+  const r = await $.process.run([os === 'win' ? 'python' : 'python3', '-I', '-c', SCAN_PY, ...args], { timeoutMs: 20000, stdin })
   return r.exitCode === 0 ? JSON.parse(r.stdout) : undefined
 }
-// 'codex:<id>' adds the Desktop sessions that session started.
-const scan = async ($: $, mode: string, mins: number, extra: string[]): Promise<Scan> =>
-  ((await py($, [mode, String(mins), ...extra])) as Scan | undefined) ?? { codex: [], claude: [] }
+// 'codex:<id>' adds the Desktop sessions that session started. `last`, the previous scan, goes in on stdin: a journal
+// unchanged since (same mtime and size) is taken from it unread.
+const scan = async ($: $, mode: string, mins: number, extra: string[], last?: Scan): Promise<Scan> =>
+  ((await py($, [mode, String(mins), ...extra], JSON.stringify(last ?? {}))) as Scan | undefined) ?? { codex: [], claude: [] }
 
 // A background `codex exec` with no rollout of its own (`codex exec resume` writes into an old one) ends only when
 // the session is told its task ended: the notification names the Bash call by its tool_use_id.
@@ -160,53 +169,20 @@ async function pollProject($: $) {
   const list = await read($, agents)
   const extra = list.filter(a => a.rollout && !ENDED.has(a.status)).map(a => a.rollout!)
   const me = (await Promise.resolve().then(() => $.session.id()).catch(() => undefined)) || sessionId
-  const { codex, claude, title } = await scan($, 'codex:' + me, 5, extra)
-  if (title) await upsert($, 'main', { title })
-  // Notifications that arrived before this load (a resume, a reload): read once from this session's journal.
+  // After a resume or /clear the process goes on under another id: the session's own row follows it.
+  if (me !== sessionId) await upsert($, 'main', { sid: (sessionId = me), journal: journalOf(root, me) })
+  lastProj = await scan($, 'codex:' + me, 5, extra, lastProj)
+  const { claude, title } = lastProj
+  if (title && title !== list.find(a => a.id === 'main')?.title) await upsert($, 'main', { title })
   // Once a load: what this session's journal says ended while no hook was listening (a resume, a reload), and the
   // background commands it ran before.
   const past = swept ? undefined : ((await py($, ['ended', '0', journalOf(root, me)])) as Past | undefined)
   swept = true
-  const told = past?.done ?? {}
   if (past) await update($, shells, l => pastShells(l, past))
   // Desktop sessions this one started sit under it, as Claude Desktop draws them.
   const kids = claude.map(r => ({ ...claudeRow(r, now), parentId: 'main' }))
-  const byPath = new Map(codex.map(r => [r.path, r]))
-  const claimed = new Set(list.map(a => a.rollout).filter(Boolean))
-
-  await update($, agents, cur => {
-    let next = cur.map(a => {
-      const st = live.get(a.id)
-      if (a.family === 'claude' && st) return { ...a, status: st, t1: ENDED.has(st) ? a.t1 ?? now : undefined }
-      if (a.family !== 'codex') return a
-      if (openBg(a) && told[a.id.slice(3)]) return { ...a, status: endStatus(told[a.id.slice(3)]!), t1: now }
-      let r = a.rollout ? byPath.get(a.rollout) : undefined
-      if (!a.rollout) {
-        // ponytail: pairs a codex launch with the first new codex_exec rollout by time; two launches in the same second may swap.
-        r = codex
-          .filter(c => c.originator === 'codex_exec' && !claimed.has(c.path) && c.t0 && Date.parse(c.t0) >= a.t0 - 3e3 && Date.parse(c.t0) <= a.t0 + 120e3)
-          .sort((x, y) => Date.parse(x.t0!) - Date.parse(y.t0!))[0]
-        if (r) claimed.add(r.path)
-      }
-      // No rollout within the pairing window (an ephemeral run, a failed start): stop counting it as running.
-      if (!r) return !a.rollout && a.how.endsWith(t.bg) && a.status === 'running' && now - a.t0 > 120e3 ? { ...a, status: 'idle' } : a
-      const ended = ENDED.has(a.status)
-      const cs = ended ? a.status : codexStatus(r, now)
-      return {
-        ...a, rollout: r.path, journal: r.path, sid: r.id ?? a.sid, stats: statsOf(r), model: r.model ?? a.model, effort: r.effort ?? a.effort, tokIn: r.tokIn, tokOut: r.tokOut,
-        status: cs, t1: a.t1 ?? (ENDED.has(cs) ? r.mtime : undefined),
-      }
-    })
-    // Codex sessions in this project nobody here launched (Codex Desktop, another terminal).
-    for (const r of codex) {
-      if (claimed.has(r.path) || !inRoot(r.cwd) || codexStatus(r, now) === 'completed' || ranNothing(r)) continue
-      const row = recToCodex(r, now)
-      const i = next.findIndex(a => a.id === row.id)
-      next = i < 0 ? [...next, row] : next.map((a, j) => (j === i ? row : a))
-    }
-    // Rows this poll added on its own for such shells in earlier versions go too.
-    return [...next.filter(a => !(a.family === 'codex' && a.id === a.rollout && ranNothing(a)) && !scanned(a)), ...kids]
-  })
+  const s = lastProj
+  await update($, agents, cur => mergeProject(cur, s, kids, live, past?.done ?? {}, now))
 
   const usage = await $.session.usage(now - compactAt > 60e3 ? { breakdown: 'summary' } : undefined).catch(() => undefined)
   if (usage) {
@@ -219,6 +195,49 @@ async function pollProject($: $) {
   const running = rows.filter(a => a.status === 'running' && a.id !== 'main').length
   const tok = rows.reduce((s, a) => s + a.tokIn + a.tokOut, 0)
   $.ui.status(running ? t.statusLine(running, fmtK(tok)) : undefined)
+}
+
+// This session's list after a poll: the hooks' rows brought up to date from the live agents (`live`: id → status) and
+// the rollouts on disk, the rollouts nobody here launched added, the Desktop children (`kids`) re-read. `told` is
+// what the journal said ended before this load, by tool_use_id.
+export function mergeProject(cur: Agent[], s: Scan, kids: Agent[], live: Map<string, string>, told: Record<string, string>, now: number): Agent[] {
+  const byPath = new Map(s.codex.map(r => [r.path, r]))
+  const claimed = new Set(cur.map(a => a.rollout).filter(Boolean))
+  let next = cur.map(a => {
+    const st = live.get(a.id)
+    if (a.family === 'claude' && st) return { ...a, status: st, t1: ENDED.has(st) ? a.t1 ?? now : undefined }
+    if (a.family !== 'codex') return a
+    if (openBg(a) && told[a.id.slice(3)]) return { ...a, status: endStatus(told[a.id.slice(3)]!), t1: now }
+    let r = a.rollout ? byPath.get(a.rollout) : undefined
+    if (!a.rollout) {
+      // ponytail: pairs a codex launch with the first new codex_exec rollout by time; two launches in the same second may swap.
+      r = s.codex
+        .filter(c => c.originator === 'codex_exec' && !claimed.has(c.path) && c.t0 && Date.parse(c.t0) >= a.t0 - 3e3 && Date.parse(c.t0) <= a.t0 + 120e3)
+        .sort((x, y) => Date.parse(x.t0!) - Date.parse(y.t0!))[0]
+      if (r) claimed.add(r.path)
+    }
+    // No rollout within the pairing window (an ephemeral run, a failed start): stop counting it as running.
+    if (!r) return !a.rollout && a.how.endsWith(t.bg) && a.status === 'running' && now - a.t0 > 120e3 ? { ...a, status: 'idle' } : a
+    const cs = ENDED.has(a.status) ? a.status : codexStatus(r, now)
+    return {
+      ...a, rollout: r.path, journal: r.path, sid: r.id ?? a.sid, stats: statsOf(r), model: r.model ?? a.model, effort: r.effort ?? a.effort, tokIn: r.tokIn, tokOut: r.tokOut,
+      // An idle row's time stops at its last activity, as a journal row's does.
+      status: cs, t1: ENDED.has(cs) ? a.t1 ?? r.mtime : cs === 'idle' ? r.mtime : undefined,
+    }
+  })
+  // A child thread names its parent by rollout path; a run launched here is listed under its Bash call's id instead.
+  const idOf = new Map(next.filter(a => a.rollout && a.id !== a.rollout).map(a => [a.rollout!, a.id]))
+  const under = (a: Agent) => (a.parentId && idOf.has(a.parentId) ? { ...a, parentId: idOf.get(a.parentId)! } : a)
+  // Rollouts nobody here launched: this project's that still run (Codex Desktop, another terminal), and any under a
+  // listed row (a child thread of a run here, a run a Desktop child session launched), finished or not.
+  const ids = new Set([...next, ...kids].map(a => a.id))
+  for (const row of codexRows(s.codex, kids, now).map(under)) {
+    if (claimed.has(row.id)) continue
+    const nested = !!row.parentId && ids.has(row.parentId)
+    if (nested || (inRoot(row.cwd) && row.status !== 'completed')) next = [...next, row]
+  }
+  // Rows added for shells that never ran go too (a launch keeps its row), as do the journal rows, re-read each poll.
+  return [...next.map(under).filter(a => !(a.family === 'codex' && a.id === a.rollout && ranNothing(a) && !a.cmd) && !scanned(a)), ...kids]
 }
 
 // A rollout with no model and no tokens never ran a turn: Codex Desktop leaves such shells behind (an auto-review
@@ -238,6 +257,11 @@ const endShells = ($: $, told: Record<string, string>) =>
 type Past = { done: Record<string, string>; at: Record<string, string>; bg: { id: string; cmd: string; title?: string; ts?: string; timeout?: number }[] }
 // An agent launch is listed too, under its family's mark.
 export const kindOf = (cmd: string): Shell['kind'] => (CODEX.test(cmd) ? 'codex' : CLAUDE_P.test(cmd) ? 'claude' : undefined)
+// Over the budget, the oldest ended commands go first (`drop--` counts them off); running ones stay while any ended remain.
+export function trimShells(list: Shell[]): Shell[] {
+  let drop = list.length - MAX_SHELLS
+  return list.filter(s => !(drop > 0 && ENDED.has(s.status) && drop--))
+}
 // The list as the journal tells it: commands it ran that are not listed yet, each ended where it was told so.
 export function pastShells(list: Shell[], past: Past): Shell[] {
   const when = (ts?: string) => (ts ? Date.parse(ts) : Date.now())
@@ -246,8 +270,8 @@ export function pastShells(list: Shell[], past: Past): Shell[] {
     id: b.id, cmd: b.cmd, title: b.title, t0: when(b.ts), status: 'running',
     ...(b.timeout ? { until: when(b.ts) + b.timeout, kind: 'monitor' as const } : { kind: kindOf(b.cmd) }),
   }))
-  return [...list, ...added].sort((x, y) => x.t0 - y.t0).slice(-MAX_SHELLS).map(s =>
-    !ENDED.has(s.status) && past.done[s.id] ? { ...s, status: endStatus(past.done[s.id]!), t1: when(past.at[s.id]) } : s)
+  return trimShells([...list, ...added].sort((x, y) => x.t0 - y.t0).map(s =>
+    !ENDED.has(s.status) && past.done[s.id] ? { ...s, status: endStatus(past.done[s.id]!), t1: when(past.at[s.id]) } : s))
 }
 // ponytail: a Monitor whose command exits early still reads as running until its deadline; nothing tells of the exit.
 export const shellNow = (s: Shell, now: number): Shell => (s.until && !ENDED.has(s.status) && now > s.until ? { ...s, status: 'completed', t1: s.until } : s)
@@ -257,7 +281,7 @@ function recToCodex(r: Rec, now: number): Agent {
   const st = codexStatus(r, now)
   return {
     id: r.path, project: projectOf(r.cwd), title: r.title || (r.kind === 'guardian_review' ? t.autoReview : projectOf(r.cwd)), model: r.model ?? '?',
-    family: 'codex', effort: r.effort, tokIn: r.tokIn, tokOut: r.tokOut, t0, t1: st === 'completed' ? r.mtime : undefined,
+    family: 'codex', effort: r.effort, tokIn: r.tokIn, tokOut: r.tokOut, t0, t1: st === 'running' ? undefined : r.mtime,
     cwd: r.cwd, sid: r.id, journal: r.path,
     stats: statsOf(r), status: st, how: r.parent ? (r.kind === 'guardian_review' ? t.codexReview : t.codexSub) : HOW[r.originator ?? ''] ?? r.originator ?? 'codex', rollout: r.path,
   }
@@ -270,8 +294,12 @@ export const openUrl = (id: string, kind: 'code' | 'work') =>
 function claudeRow(r: Rec, now: number): Agent {
   const sub = r.path.includes('/subagents/')
   const fresh = now - r.mtime < 60e3
+  // A subagent sits under its session, or under the agent that spawned it when nested: that agent's journal lies in
+  // the same folder, named by the id its record gives.
+  const home = r.path.split('/subagents/')[0]!
+  const up = r.meta?.parentAgentId ? `${home}/subagents/agent-${r.meta.parentAgentId}.jsonl` : home + '.jsonl'
   return {
-    id: r.path, parentId: sub ? r.path.split('/subagents/')[0] + '.jsonl' : undefined, project: projectOf(r.cwd),
+    id: r.path, parentId: sub ? up : undefined, project: projectOf(r.cwd),
     title: r.meta?.description ?? r.title ?? projectOf(r.cwd), model: (r.model ?? '?').replace(/^claude-/, ''),
     family: 'claude', effort: r.effort, tokIn: r.tokIn, tokOut: r.tokOut, t0: r.t0 ? Date.parse(r.t0) : r.mtime,
     t1: fresh ? undefined : r.mtime, status: fresh ? 'running' : 'idle', stats: statsOf(r),
@@ -281,37 +309,46 @@ function claudeRow(r: Rec, now: number): Agent {
   }
 }
 
-export function fromScan(s: Scan, now: number): Agent[] {
-  const bySid = new Map(s.claude.map(r => [r.path.split('/').pop()!.replace('.jsonl', ''), r.path]))
-  // A Desktop session started from another one sits under it, when that one is in the list too.
-  const claude = s.claude.map(r => {
+// The Claude journals as rows: a Desktop session started from another one sits under it, when that one is listed too.
+function claudeRows(recs: Rec[], now: number): Agent[] {
+  const bySid = new Map(recs.map(r => [r.path.split('/').pop()!.replace('.jsonl', ''), r.path]))
+  return recs.map(r => {
     const row = claudeRow(r, now)
     const up = r.desktop?.parent && bySid.get(r.desktop.parent)
     return up && !row.parentId ? { ...row, parentId: up } : row
   })
-  const byThread = new Map(s.codex.map(r => [r.id, r.path]))
-  // A launch from Bash stays even before its first turn: it is the run that was just started.
-  const codex = s.codex.filter(r => r.launch || !ranNothing(r)).map(r => {
+}
+// The Codex rollouts as rows: a child thread under its parent thread, a run under the journal row (among `claude`)
+// whose Bash call launched it, titled as that call was. A launch stays even before its first turn: it is the run
+// that was just started.
+function codexRows(recs: Rec[], claude: Agent[], now: number): Agent[] {
+  const byThread = new Map(recs.map(r => [r.id, r.path]))
+  return recs.filter(r => r.launch || !ranNothing(r)).map(r => {
     const row = recToCodex(r, now)
     const l = r.launch
     const up = r.parent && byThread.get(r.parent)
-    if (up) return { ...row, parentId: up, project: projectOf(s.codex.find(c => c.path === up)?.cwd ?? r.cwd) }
+    if (up) return { ...row, parentId: up, project: projectOf(recs.find(c => c.path === up)?.cwd ?? r.cwd) }
     const parent = claude.find(c => c.id === l?.path)
     return l ? { ...row, project: parent?.project ?? row.project, parentId: l.path, title: l.title || row.title, how: l.bg ? 'codex exec · ' + t.bg : 'codex exec', cmd: l.cmd } : row
   })
-  return [...claude, ...codex]
+}
+export function fromScan(s: Scan, now: number): Agent[] {
+  const claude = claudeRows(s.claude, now)
+  return [...claude, ...codexRows(s.codex, claude, now)]
 }
 
-async function pollAll($: $) {
+// One All scan at a time: a press on the scope while the clock's scan runs joins it instead of starting another.
+const pollAll = ($: $) => allRun ?? (allRun = scanAll($).finally(() => { allRun = undefined }))
+async function scanAll($: $) {
   const view = await read($, viewA)
   if (view.scope !== 'all') return
   lastAll = Date.now()
   const mins = view.showDone ? 120 : ACTIVE_MIN
   // Every chat shows the same machine-wide list: a scan another chat made in the last few seconds, for the same
-  // window, is reused from the shared store instead of read from disk again.
+  // window, is reused from the shared store instead of read from disk again; an older one seeds the next scan.
   const kept = (await $.store.get('allScan').catch(() => undefined)) as { at: number; mins: number; s: Scan } | undefined
   const fresh = kept && kept.mins === mins && Date.now() - kept.at < 9e3
-  const s = fresh ? kept.s : await scan($, 'all', mins, [])
+  const s = fresh ? kept.s : await scan($, 'all', mins, [], kept?.s)
   if (!fresh) await $.store.set('allScan', { at: Date.now(), mins, s }).catch(() => {})
   await update($, others, () => fromScan(s, Date.now()))
 }
@@ -473,7 +510,7 @@ export const register: Register = (on, options) => {
     if (!bg && !codex) return next(e)
     const id = 'cx:' + e.tool_use_id, sid = e.tool_use_id
     // Every background command is listed with the others, an agent launch under its family's mark.
-    if (bg) await update($, shells, l => [...l, { id: sid, cmd, title: e.description, t0: Date.now(), status: 'running', kind: kindOf(cmd) }].slice(-MAX_SHELLS))
+    if (bg) await update($, shells, l => trimShells([...l, { id: sid, cmd, title: e.description, t0: Date.now(), status: 'running', kind: kindOf(cmd) }]))
     const p = parseCodex(cmd)
     if (codex) await upsert($, id, {}, {
       id, parentId: e.agentId ?? 'main', project: projectOf(root), title: e.description || p.prompt || 'codex exec',
@@ -493,7 +530,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Monitor' }, async ($, e, next) => {
     if (!e.command) return next(e)
     const id = e.tool_use_id, t0 = Date.now()
-    await update($, shells, l => [...l, { id, cmd: e.command!, title: e.description, t0, status: 'running', kind: 'monitor' as const, until: t0 + Math.min(e.timeout_ms || 300000, 1800000) }].slice(-MAX_SHELLS))
+    await update($, shells, l => trimShells([...l, { id, cmd: e.command!, title: e.description, t0, status: 'running', kind: 'monitor' as const, until: t0 + Math.min(e.timeout_ms || 300000, 1800000) }]))
     const r = await next(e)
     const taskId = (r.result as { taskId?: string } | undefined)?.taskId
     await update($, shells, l => l.map(s => (s.id !== id ? s : r.deny || r.isError ? { ...s, status: 'failed', t1: Date.now() } : { ...s, taskId })))
@@ -536,7 +573,16 @@ export const register: Register = (on, options) => {
     const now = Date.now()
     // Current: running, or not ended and active within the window. A subagent left waiting since yesterday is not.
     const current = (a: Agent) => a.status === 'running' || (!ENDED.has(a.status) && now - (a.stats?.lastAt ?? a.t1 ?? a.t0) < ACTIVE_MIN * 60e3)
-    const list = all.filter(a => (view.showDone || a.id === 'main' || current(a)) && !isHidden(a))
+    // Every ancestor (from `pool`) of a listed row is listed with it, so a child is never drawn as a root of its own:
+    // a quiet session whose subagent still runs, a parent past the row budget.
+    const withParents = (rows: Agent[], pool: Agent[]) => {
+      const by = new Map(pool.map(a => [a.id, a]))
+      const out = new Map(rows.map(a => [a.id, a]))
+      for (const a of rows) for (let p = by.get(a.parentId ?? ''); p && !out.has(p.id); p = by.get(p.parentId ?? '')) out.set(p.id, p)
+      return [...out.values()]
+    }
+    const visible = all.filter(a => !isHidden(a))
+    const list = withParents(visible.filter(a => view.showDone || a.id === 'main' || current(a)), visible)
     const ctxOf = (a: Agent) => {
       const w = a.stats?.ctxWindow ?? (a.family === 'claude' ? claudeWindow : 0)
       return a.stats?.ctx && w ? Math.min(1, a.stats.ctx / w) : undefined
@@ -564,10 +610,13 @@ export const register: Register = (on, options) => {
     // Claude Desktop draws nothing at all past a couple of thousand elements: past MAX_ROWS the oldest ended rows go.
     const keep = new Set([...listed].sort((x, y) => +ENDED.has(x.status) - +ENDED.has(y.status) || (y.t1 ?? now) - (x.t1 ?? now))
       .slice(0, MAX_ROWS).map(a => a.id))
-    const shown = listed.filter(a => keep.has(a.id) || a.id === 'main' || a.id === view.sel)
+    // A switched-off family's rows are no parents here; a running-only list still shows the parent of a running row.
+    const shown = withParents(listed.filter(a => keep.has(a.id) || a.id === 'main' || a.id === view.sel), list.filter(a => !off.has(a.family)))
+    const shownIds = new Set(shown.map(a => a.id))
+    const left = listed.filter(a => !shownIds.has(a.id)).length
     const maxTok = Math.max(1, ...shown.map(a => a.tokIn + a.tokOut))
     // 'main' stands for this session: in "All" it is the scanned row carrying this session's id.
-    const selId = view.sel === 'main' && view.scope === 'all' ? shown.find(a => a.family === 'claude' && a.sid === sessionId)?.id : view.sel
+    const selId = view.sel === 'main' && view.scope === 'all' ? shown.find(a => a.family === 'claude' && a.sid === meSid)?.id : view.sel
     const sel = shown.find(a => a.id === selId)
     // A pinned agent and everything under it form the first group; the rest group by project.
     const byId = new Map(shown.map(a => [a.id, a]))
@@ -914,7 +963,7 @@ export const register: Register = (on, options) => {
       const out: ReturnType<typeof Button>[] = []
       if (a.open) out.push(btn('a-open', '↗', t.btn.chat, C.claude!, () => run(opener(a.open!.url), t.chatOpened), true))
       // Only the session this mod runs in can be compacted from here; in "All sessions" it is the row with its id.
-      if (a.family === 'claude' && a.sid === sessionId)
+      if (a.family === 'claude' && a.sid === meSid)
         out.push(btn('a-compact', '⇊', t.btn.compact, C.fresh!, () => void $.session.compact().then(r => say('skip' in r && r.skip ? t.compactSkipped + r.skip : t.compacted), err => say(t.compactFailed + String(err).slice(0, 200)))))
       // Handoff opens Claude Desktop, which has no Linux build.
       if (os !== 'linux' && a.cwd && a.journal && (a.family === 'codex' || a.sid))
@@ -1136,7 +1185,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column">
           {!compact && head}
           {shown.length === 0 && <Box paddingX={1}><Text dimColor>{view.scope === 'all' ? t.scanning : t.none}</Text></Box>}
-          {shown.length < listed.length && <Box paddingX={1}><Text dimColor>{t.moreRows(listed.length - shown.length)}</Text></Box>}
+          {left > 0 && <Box paddingX={1}><Text dimColor>{t.moreRows(left)}</Text></Box>}
           {view.scope === 'proj'
             ? [...rows(shown), ...shellRows()]
             : projects.flatMap(([g, p]) => [

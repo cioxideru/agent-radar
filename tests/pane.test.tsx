@@ -246,3 +246,21 @@ test('background commands list the running ones by default, agent launches under
   expect(await ui.find({ text: /Watch the build/ } as never)).toBeUndefined()
   await ui.unmount()
 })
+
+test('among all sessions a quiet session still heads its running subagent, so the subagent is never a root', async ($, on) => {
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  const now = Date.now()
+  mock.store(on, { allScan: { at: now, mins: 15, s: { codex: [], claude: [
+    { path: '/p/Q.jsonl', mtime: now - 40 * 60e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 3600e3).toISOString(), title: 'Quiet lead' },
+    { path: '/p/Q/subagents/agent-b1.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), meta: { description: 'Busy helper' } },
+  ] } } })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+    await ui.press({ key: 's-all' })
+    expect(await ui.find({ text: /Quiet lead/ } as never)).toBeDefined()
+    expect(await ui.find({ text: /Busy helper/ } as never)).toBeDefined()
+    // The terminal draws the nesting as a guide before the child's title.
+    if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: /└─ / })).toBeDefined()
+    await ui.unmount()
+  }
+})

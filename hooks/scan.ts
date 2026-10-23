@@ -7,20 +7,36 @@ mode, _, me = mode.partition(':')
 now = time.time()
 # Paths use / on every system, so the mod can split them the same way on Windows.
 H = os.path.expanduser('~').replace(os.sep, '/')
+# The last scan's rows, by path, from stdin: a journal unchanged since (same mtime and size) is taken from it unread.
+cache = {}
+try:
+    last = json.load(sys.stdin) if not sys.stdin.isatty() else {}
+    cache = {r['path']: r for k in ('codex', 'claude') for r in (last.get(k) or [])}
+except (ValueError, OSError, AttributeError):
+    pass
 
 def files(pattern, **kw):
     return [p.replace(os.sep, '/') for p in glob.glob(pattern, **kw)]
 
-def recent(paths):
+def stats(paths):
     out = {}
     for p in paths:
         try:
-            mt = os.stat(p).st_mtime
+            out[p] = os.stat(p)
         except OSError:
             continue
-        if now - mt <= mins * 60 or p in extra:
-            out[p] = mt
     return out
+
+def recent(paths):
+    return {p: st for p, st in stats(paths).items() if now - st.st_mtime <= mins * 60 or p in extra}
+
+def parse(p, st, read):
+    r = cache.get(p)
+    if r and abs(r.get('mtime', 0) - st.st_mtime * 1000) < 1 and r.get('size') == st.st_size:
+        return r
+    r = read(p, st.st_mtime)
+    r['size'] = st.st_size
+    return r
 
 BINS = 32
 
@@ -96,12 +112,25 @@ def codex(p, mt):
     return r
 
 def claude(p, mt):
-    r = {'path': p, 'mtime': mt * 1000}
+    # launches: the codex exec Bash calls this journal made, kept with it so a cached journal still pairs its runs.
+    r = {'path': p, 'mtime': mt * 1000, 'launches': []}
     usage, when, tools, turns = {}, {}, {}, 0
     with open(p, errors='replace') as f:
         for l in f:
+            # The session's start and folder from its first lines, whatever kind they are: a session with no reply yet
+            # still has a prompt with a cwd.
+            if ('t0' not in r or 'cwd' not in r) and '"timestamp"' in l:
+                d = load(l)
+                if d.get('timestamp'):
+                    r.setdefault('t0', d['timestamp'])
+                if d.get('cwd'):
+                    r.setdefault('cwd', d['cwd'])
             if '"type":"assistant"' in l:
                 d = load(l)
+                if d.get('type') != 'assistant':
+                    # A user line quoting an assistant line (a journal read back into the chat).
+                    turns += d.get('type') == 'user' and not d.get('isMeta') and '"tool_result"' not in l
+                    continue
                 m = d.get('message') or {}
                 if m.get('usage'):
                     k = m.get('id') or d.get('requestId')
@@ -110,23 +139,18 @@ def claude(p, mt):
                 r['model'] = m.get('model') or r.get('model')
                 r['effort'] = d.get('effort') or r.get('effort')
                 r['entry'] = d.get('entrypoint') or r.get('entry')
-                # The folder the session started in: a later cd moves each line's cwd, not the session's project.
-                if d.get('cwd'):
-                    r.setdefault('cwd', d['cwd'])
-                r.setdefault('t0', d.get('timestamp'))
                 for b in m.get('content') if isinstance(m.get('content'), list) else []:
-                    i = (b.get('input') or {}) if isinstance(b, dict) else {}
-                    if isinstance(b, dict) and b.get('type') == 'tool_use':
-                        tools[b.get('name')] = tools.get(b.get('name'), 0) + 1
-                    if isinstance(b, dict) and b.get('type') == 'tool_use' and 'codex' in str(i.get('command', '')) and ' exec' in str(i.get('command', '')):
-                        launches.append({'ts': d.get('timestamp'), 'path': p, 'cmd': i['command'][:600], 'title': i.get('description'), 'bg': bool(i.get('run_in_background'))})
+                    if not (isinstance(b, dict) and b.get('type') == 'tool_use'):
+                        continue
+                    tools[b.get('name')] = tools.get(b.get('name'), 0) + 1
+                    cmd = str((b.get('input') or {}).get('command', '')) if isinstance(b.get('input'), dict) else ''
+                    if 'codex' in cmd and ' exec' in cmd:
+                        r['launches'].append({'ts': d.get('timestamp'), 'path': p, 'cmd': cmd[:600], 'title': b['input'].get('description'), 'bg': bool(b['input'].get('run_in_background'))})
             elif '"type":"user"' in l and '"isMeta":true' not in l and '"tool_result"' not in l:
                 turns += 1
             elif '"custom-title"' in l[:40] or '"ai-title"' in l[:40]:
                 d = load(l)
                 r['title'] = d.get('customTitle') or d.get('aiTitle') or r.get('title')
-            elif 't0' not in r and '"timestamp"' in l:
-                r['t0'] = load(l).get('timestamp')
     r['tokIn'] = sum(u.get('input_tokens', 0) + u.get('cache_creation_input_tokens', 0) + u.get('cache_read_input_tokens', 0) for u in usage.values())
     r['tokOut'] = sum(u.get('output_tokens', 0) for u in usage.values())
     r['cacheRead'] = sum(u.get('cache_read_input_tokens', 0) for u in usage.values())
@@ -137,10 +161,15 @@ def claude(p, mt):
     r['tools'] = sorted(tools.items(), key=lambda x: -x[1])[:6]
     r['series'] = series([(when.get(k), u.get('output_tokens', 0)) for k, u in usage.items()])
     r['requests'], r['turns'] = len(usage), turns
-    meta = p[:-6] + '.meta.json'
-    if os.path.exists(meta):
-        r['meta'] = load(open(meta).read())
+    r['meta'] = meta(p)
     return r
+
+def meta(p):
+    # A subagent's record beside its journal: description, agent type, request shape, its parent agent when nested.
+    try:
+        return load(open(p[:-6] + '.meta.json', errors='replace').read())
+    except OSError:
+        return None
 
 # Background tasks this journal was told have ended, by the tool call that started them, and the background shell
 # commands it ran (newest last), so a load picks up what ran before it.
@@ -170,13 +199,18 @@ if mode == 'ended':
     print(json.dumps({'done': done, 'at': at, 'bg': bg}))
     sys.exit()
 
-def desktop():
+def desktop(only=None):
     # Claude Desktop keeps one record per session: its own id (what claude:// links take), the CLI transcript id, the
-    # folder it was opened in and the session that started it.
+    # folder it was opened in and the session that started it. With only (a CLI session id), just that session's
+    # record and the records of the sessions it started are read, which keeps the 3 s poll light.
     A = {'darwin': H + '/Library/Application Support', 'win32': os.environ.get('APPDATA', '').replace(os.sep, '/')}.get(sys.platform, H + '/.config') + '/Claude/'
+    texts = [(p, open(p, errors='replace').read()) for p in files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True)]
+    if only is not None:
+        ids = {only} | {load(s).get('sessionId') for p, s in texts if only in s}
+        texts = [(p, s) for p, s in texts if any(i and i in s for i in ids)]
     recs, cli = [], {}
-    for p in files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True):
-        d = load(open(p, errors='replace').read())
+    for p, s in texts:
+        d = load(s)
         if d.get('cliSessionId'):
             cli[d.get('sessionId')] = d['cliSessionId']
             recs.append((d, 'code' if 'claude-code-sessions' in p else 'work'))
@@ -189,12 +223,36 @@ def withDesk(r, desk):
         r['cwd'] = r['desktop']['cwd']
     return r
 
-launches = []
+def parents(paths, desk):
+    # The journals the given ones hang under: a subagent's session and, when nested, its parent agent; a Desktop
+    # session's starter. Read even when quiet, so no child is drawn as a root of its own.
+    out = set()
+    for p in paths:
+        if '/subagents/' in p:
+            s = p.split('/subagents/')[0]
+            out.add(s + '.jsonl')
+            up = (meta(p) or {}).get('parentAgentId')
+            if up:
+                out.add(s + '/subagents/agent-' + str(up) + '.jsonl')
+        else:
+            d = desk.get(os.path.basename(p)[:36])
+            if d and d.get('parent'):
+                out.update(files(H + '/.claude/projects/*/' + d['parent'] + '.jsonl'))
+    return out - set(paths)
+
 out = {'codex': [], 'claude': []}
 days = {(datetime.date.today() - datetime.timedelta(days=i)).strftime('%Y/%m/%d') for i in (0, 1)}
 cx = [p for d in days for p in files(H + '/.codex/sessions/' + d + '/rollout-*.jsonl')] + extra
-for p, mt in recent(set(cx)).items():
-    out['codex'].append(codex(p, mt))
+for p, st in recent(set(cx)).items():
+    out['codex'].append(parse(p, st, codex))
+# A child thread's parent rollout, read even when quiet; the rollout's name ends in its thread id.
+seen = {r.get('id') for r in out['codex']}
+want = {r['parent'] for r in out['codex'] if r.get('parent') and r['parent'] not in seen}
+while want:
+    found = stats(q for pid in want for q in files(H + '/.codex/sessions/*/*/*/rollout-*-' + pid + '.jsonl'))
+    seen |= want
+    out['codex'] += [parse(p, st, codex) for p, st in found.items()]
+    want = {r['parent'] for r in out['codex'] if r.get('parent') and r['parent'] not in seen}
 names = {}
 try:
     for l in open(H + '/.codex/session_index.jsonl', errors='replace'):
@@ -208,18 +266,23 @@ for r in out['codex']:
         r['title'] = names[r['id']]
 if mode == 'all':
     desk = desktop()
-    cl = files(H + '/.claude/projects/*/*.jsonl') + files(H + '/.claude/projects/*/*/subagents/agent-*.jsonl')
-    for p, mt in recent(cl).items():
-        out['claude'].append(withDesk(claude(p, mt), desk))
+    cl = recent(files(H + '/.claude/projects/*/*.jsonl') + files(H + '/.claude/projects/*/*/subagents/agent-*.jsonl'))
+    add = parents(cl, desk)
+    while add:
+        add = stats(add)
+        cl.update(add)
+        add = parents(add, desk)
+    for p, st in cl.items():
+        out['claude'].append(withDesk(parse(p, st, claude), desk))
 elif me:
-    # ponytail: every child journal is read on each poll; an mtime cache if a session starts dozens of them.
-    desk = desktop()
+    desk = desktop(me)
     # The title Claude Desktop gives this session, so its row reads as it does among all sessions.
     out['title'] = (desk.get(me) or {}).get('title')
     for sid, d in desk.items():
-        for p in files(H + '/.claude/projects/*/' + sid + '.jsonl') if d['parent'] == me else []:
-            out['claude'].append(withDesk(claude(p, os.stat(p).st_mtime), desk))
+        for p, st in stats(files(H + '/.claude/projects/*/' + sid + '.jsonl') if d['parent'] == me else []).items():
+            out['claude'].append(withDesk(parse(p, st, claude), desk))
 # A codex_exec rollout starts within two minutes of the Bash call that launched it.
+launches = [l for r in out['claude'] for l in r.get('launches') or []]
 for r in out['codex']:
     t = iso(r.get('t0'))
     near = [l for l in launches if t and iso(l['ts']) and 0 <= t - iso(l['ts']) <= 120 and r.get('originator') == 'codex_exec']
