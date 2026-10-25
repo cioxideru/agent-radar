@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Shell, Stats, View } from '../types'
-import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from './charts'
+import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, sparkline, stackBar } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
@@ -554,7 +554,9 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const Input = 'Input' in els ? els.Input : undefined
-    const Svg = 'Svg' in els ? els.Svg : undefined
+    // Drawings only where they are drawn: the terminal resolves an Svg element too, but paints it as an empty box,
+    // so it gets the text fallbacks instead.
+    const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : undefined
     const view = await read($, viewA)
     await read($, tick)
     const bgCmds = view.scope === 'proj' ? (await read($, shells)).map(s => shellNow(s, Date.now())) : []
@@ -720,6 +722,14 @@ export const register: Register = (on, options) => {
           ? <Text key={'q-' + f} bold><Text color={color}>{String(live)}</Text>{rest ? <Text color={C.muted}>{' ' + rest}</Text> : ''}</Text>
           : <Text key={'q-' + f}><Text color={color}>{'■'.repeat(live)}</Text><Text color={C.muted}>{'■'.repeat(rest)}</Text></Text>
       })
+    }
+    // The project header's mark: a drawn folder on graphical surfaces, a colored square in the terminal.
+    const groupMark = (g: string) => {
+      if (g === PINNED) return false
+      const color = projectColor(g)
+      return Svg
+        ? <Svg key={'pm-' + g} source={`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${folderMark(color)}</svg>`} alt={g} width={18} height={18} />
+        : <Text key={'pm-' + g} color={color}>■</Text>
     }
     // Fold toggle on a root row with children: a chevron, down when open and right when folded with the number of
     // agents under it in its own color. A text glyph inside the button, so the whole chevron takes the click.
@@ -1190,8 +1200,10 @@ export const register: Register = (on, options) => {
             ? [...rows(shown), ...shellRows()]
             : projects.flatMap(([g, p]) => [
                 <Box key={'p' + p} flexDirection="row" gap={1} alignItems="center" paddingX={1} marginTop={1}>
-                  {/* The surface's own text color: darker than the muted gray on a light pane, lighter on a dark one. */}
-                  <Text bold>{p}</Text>
+                  {/* A folder in the project's own color, a star for the pinned group; the name a size up in the
+                      surface's own text color, which holds on a light pane and a dark one. */}
+                  {groupMark(g)}
+                  <Text bold size="heading">{p}</Text>
                   {groupCubes(shown.filter(a => groupOf(a) === g), p)}
                 </Box>,
                 ...rows(shown.filter(a => groupOf(a) === g)),

@@ -76,3 +76,23 @@ export function chip(parts: { n: number; color: string }[], asCounts: boolean, i
   const w = Math.round(x - (asCounts ? space : gap) + pad)
   return { w, h, source: svg(w, h, `<rect width="${w}" height="${h}" rx="${h / 2}" fill="#8a90a033"/>${head}${marks.join('')}`) }
 }
+
+// A project's own color, the same in every chat and session: a hue from its name, at a saturation and lightness that
+// hold on light and dark panes. Hex, since the terminal takes no hsl().
+// ponytail: two names may land on near hues; a per-project override if that bites.
+export function projectColor(name: string) {
+  let h = 0
+  for (const ch of name.toLowerCase()) h = (h * 31 + ch.codePointAt(0)!) >>> 0
+  const hue = (h % 360) / 360, s = 0.62, l = 0.56
+  const f = (n: number) => {
+    const k = (n + hue * 12) % 12
+    const v = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+    return Math.round(v * 255).toString(16).padStart(2, '0')
+  }
+  return '#' + f(0) + f(8) + f(4)
+}
+
+// Our own folder mark on a 16-unit square in the project's color: the back with its tab, a lighter front over it.
+export const folderMark = (color: string) =>
+  `<path d="M1.5 4a1.5 1.5 0 0 1 1.5-1.5h3.1l1.7 1.7H13A1.5 1.5 0 0 1 14.5 5.7v6.8A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5Z" fill="${color}"/>` +
+  `<path d="M1.5 6.6A1.2 1.2 0 0 1 2.7 5.4h10.6a1.2 1.2 0 0 1 1.2 1.2v5.9A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5Z" fill="#fff" fill-opacity="0.22"/>`

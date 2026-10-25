@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { chip, CLAUDE_MARK, CODEX_MARK, meter, sparkline, stackBar } from '../hooks/charts'
+import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, sparkline, stackBar } from '../hooks/charts'
 
 import type { Agent, Shell } from '../types'
 import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, ordered, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, trimShells } from '../hooks/register'
@@ -174,4 +174,11 @@ test('past the budget the oldest ended commands go first; running ones stay', ()
   expect(out).toHaveLength(20)
   expect(out.filter(s => s.status === 'running')).toHaveLength(12)
   expect(out.map(s => s.id).slice(0, 3)).toEqual(['s0', 's2', 's4'])
+})
+
+test('each project has its own steady color and a folder mark in it', () => {
+  expect(projectColor('Orbit-Shop')).toBe(projectColor('orbit-shop'))
+  expect(projectColor('orbit-shop')).toMatch(/^#[0-9a-f]{6}$/)
+  expect(new Set(['orbit-shop', 'lumen', 'atlas-api', 'harbor'].map(projectColor)).size).toBe(4)
+  expect(folderMark('#123456')).toContain('fill="#123456"')
 })

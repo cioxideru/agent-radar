@@ -261,6 +261,8 @@ test('among all sessions a quiet session still heads its running subagent, so th
     expect(await ui.find({ text: /Busy helper/ } as never)).toBeDefined()
     // The terminal draws the nesting as a guide before the child's title.
     if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: /└─ / })).toBeDefined()
+    // The project header carries its folder mark in the project's color.
+    expect(await ui.find(surface === 'desktop' ? { type: 'Svg', alt: 'proj' } as never : { type: 'Text', text: /^■$/ })).toBeDefined()
     await ui.unmount()
   }
 })
