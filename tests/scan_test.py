@@ -1,6 +1,6 @@
 """Self-check of scan.py on fictional journals in a temporary home: quiet parents are read for their active children
-(a session for its subagent, an agent for a nested one, a Codex thread for its child), the cache on stdin spares
-unchanged journals, and a user line quoting an assistant line is still a turn. Run: python3 -I tests/scan_test.py"""
+(a session for its subagent, an agent for a nested one, a Codex thread for its child), a chat Remote Control holds
+open stays listed while alive, the cache on stdin spares unchanged journals, and a user line quoting an assistant line is still a turn. Run: python3 -I tests/scan_test.py"""
 import json, os, subprocess, sys, tempfile, time, datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +53,28 @@ with tempfile.TemporaryDirectory() as home:
     assert paths['S1.jsonl']['cwd'] == '/x/Proj' and paths['S1.jsonl']['t0'] == iso(OLD - 60)
     assert paths['agent-a2.jsonl']['meta']['parentAgentId'] == 'a1'
     assert {r['id'] for r in out['codex']} == {'T1', 'T2'}, out['codex']
+
+    # A chat Remote Control holds open: listed while quiet, titled from beside its journal, and only while alive.
+    # A Desktop chat with Remote Control on, and a record whose process is gone, stay out.
+    write(P + 'R1.jsonl', [user], OLD)
+    os.makedirs(P + 'R1')
+    json.dump({'customTitle': 'Held'}, open(P + 'R1/custom-title.json', 'w'))
+    write(P + 'R2.jsonl', [user], OLD)
+    write(P + 'R3.jsonl', [user], OLD)
+    gone = subprocess.Popen([sys.executable, '-c', ''])
+    gone.wait()
+    os.makedirs(home + '/.claude/sessions')
+    for name, rec in (('1', {'sessionId': 'R1', 'bridgeSessionId': 'b', 'pid': os.getpid()}),
+                      ('2', {'sessionId': 'R2', 'bridgeSessionId': 'b', 'pid': os.getpid(), 'hostSessionId': 'local_x'}),
+                      ('3', {'sessionId': 'R3', 'bridgeSessionId': 'b', 'pid': gone.pid})):
+        json.dump(rec, open(home + '/.claude/sessions/' + name + '.json', 'w'))
+    held = {r['path'].split('/')[-1]: r for r in scan(home, 'all', '15')['claude']}
+    assert 'R2.jsonl' not in held and 'R3.jsonl' not in held, sorted(held)
+    assert held['R1.jsonl']['live'] and held['R1.jsonl']['entry'] == 'remote-control' and held['R1.jsonl']['title'] == 'Held', held['R1.jsonl']
+    assert not held['S1.jsonl']['live']
+    for f in os.listdir(home + '/.claude/sessions'):
+        os.remove(home + '/.claude/sessions/' + f)
+    assert 'R1.jsonl' not in {r['path'].split('/')[-1] for r in scan(home, 'all', '15', stdin=json.dumps({'claude': list(held.values())}))['claude']}
 
     # The cache: an unchanged journal's row comes back as given; a changed one is read anew.
     paths['S1.jsonl']['title'] = 'CACHED'

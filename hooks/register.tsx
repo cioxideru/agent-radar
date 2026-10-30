@@ -13,7 +13,8 @@ type Rec = {
   model?: string; effort?: string; title?: string
   originator?: string; started?: number; done?: number
   // A subagent's record beside its journal; `parentAgentId` when another agent spawned it, not the session.
-  entry?: string; meta?: { description?: string; agentType?: string; requestShape?: string; parentAgentId?: string } | null
+  // live: a chat claude remote-control holds open, listed however long it has been quiet.
+  entry?: string; live?: boolean; meta?: { description?: string; agentType?: string; requestShape?: string; parentAgentId?: string } | null
   // The `codex exec` calls a Claude journal made: the scanner's own, carried so a cached journal still pairs its runs.
   launches?: unknown[]
   launch?: { path: string; cmd: string; title?: string; bg: boolean }
@@ -44,7 +45,7 @@ const EFF = ['low', 'medium', 'high', 'xhigh', 'max']
 // low → max: white, yellow, green, blue, purple.
 const EFF_COLOR = ['#e7e9ef', '#e8b23a', '#3fcf7f', '#5aa9e6', '#a98bf0']
 const HOW: Record<string, string> = {
-  'claude-desktop': 'Claude Desktop', cli: 'Claude Code CLI', 'sdk-ts': 'Agent SDK', 'sdk-py': 'Agent SDK',
+  'claude-desktop': 'Claude Desktop', cli: 'Claude Code CLI', 'remote-control': 'Remote Control', 'sdk-ts': 'Agent SDK', 'sdk-py': 'Agent SDK',
   codex_exec: 'codex exec', 'Codex Desktop': 'Codex Desktop',
 }
 
@@ -303,7 +304,7 @@ function claudeRow(r: Rec, now: number): Agent {
     title: r.meta?.description ?? r.title ?? projectOf(r.cwd), model: (r.model ?? '?').replace(/^claude-/, ''),
     family: 'claude', effort: r.effort, tokIn: r.tokIn, tokOut: r.tokOut, t0: r.t0 ? Date.parse(r.t0) : r.mtime,
     t1: fresh ? undefined : r.mtime, status: fresh ? 'running' : 'idle', stats: statsOf(r),
-    cwd: r.cwd, sid: sub ? undefined : r.path.split('/').pop()!.replace('.jsonl', ''), journal: r.path,
+    cwd: r.cwd, sid: sub ? undefined : r.path.split('/').pop()!.replace('.jsonl', ''), journal: r.path, live: r.live,
     open: r.desktop && !sub ? { kind: r.desktop.kind, url: openUrl(r.desktop.id, r.desktop.kind) } : undefined,
     how: sub ? (r.meta?.requestShape === 'background' ? 'Agent · ' + t.bg : 'Agent') + (r.meta?.agentType ? ' · ' + r.meta.agentType : '') : HOW[r.entry ?? ''] ?? r.entry ?? '?',
   }
@@ -574,7 +575,7 @@ export const register: Register = (on, options) => {
     const isHidden = (a?: Agent): boolean => !!a && (hidden.has(a.id) || isHidden(a.parentId ? allById.get(a.parentId) : undefined))
     const now = Date.now()
     // Current: running, or not ended and active within the window. A subagent left waiting since yesterday is not.
-    const current = (a: Agent) => a.status === 'running' || (!ENDED.has(a.status) && now - (a.stats?.lastAt ?? a.t1 ?? a.t0) < ACTIVE_MIN * 60e3)
+    const current = (a: Agent) => a.status === 'running' || a.live || (!ENDED.has(a.status) && now - (a.stats?.lastAt ?? a.t1 ?? a.t0) < ACTIVE_MIN * 60e3)
     // Every ancestor (from `pool`) of a listed row is listed with it, so a child is never drawn as a root of its own:
     // a quiet session whose subagent still runs, a parent past the row budget.
     const withParents = (rows: Agent[], pool: Agent[]) => {

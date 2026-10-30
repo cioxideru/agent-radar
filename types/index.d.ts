@@ -18,6 +18,7 @@ export type Agent = {
   cwd?: string
   sid?: string
   journal?: string
+  live?: boolean
   prompt?: string
   atype?: string
   taskId?: string
