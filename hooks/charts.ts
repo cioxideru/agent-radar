@@ -53,6 +53,12 @@ export const CLAUDE_MARK =
   '<rect width="16" height="16" rx="4.5" fill="#D97757"/>' +
   '<path d="M8.45 7.19L9.93 3.98A0.82 0.82 0 0 0 8.34 3.56L8.02 7.07ZM8.88 7.71L13.17 5.74A0.82 0.82 0 0 0 12.30 4.35L8.65 7.34ZM8.89 8.27L12.73 9.07A0.82 0.82 0 0 0 12.82 7.43L8.91 7.83ZM8.42 8.82L10.12 11.69A0.82 0.82 0 0 0 11.36 10.62L8.76 8.53ZM7.91 8.92L7.96 13.64A0.82 0.82 0 0 0 9.59 13.41L8.34 8.86ZM7.28 8.59L4.41 11.40A0.82 0.82 0 0 0 5.72 12.39L7.63 8.85ZM7.08 8.08L2.17 9.14A0.82 0.82 0 0 0 2.71 10.69L7.22 8.50ZM7.31 7.38L4.52 5.22A0.82 0.82 0 0 0 3.75 6.67L7.10 7.77ZM7.80 7.09L6.33 2.72A0.82 0.82 0 0 0 4.86 3.43L7.41 7.29Z" fill="#FAF6EF"/><circle cx="8" cy="8" r="1.1" fill="#FAF6EF"/>'
 
+// Our own Remote Control mark: the Claude tile, so the family still reads, with a phone and its two waves.
+export const REMOTE_MARK =
+  '<rect width="16" height="16" rx="4.5" fill="#D97757"/>' +
+  '<rect x="2.5" y="2.8" width="6" height="10.4" rx="1.6" fill="#FAF6EF"/><path d="M4.4 10.8h2.2" stroke="#D97757" stroke-width="1.1" stroke-linecap="round"/>' +
+  '<path d="M10.5 6.1a2.7 2.7 0 0 1 0 3.8M12.4 4.3a5.2 5.2 0 0 1 0 7.4" fill="none" stroke="#FAF6EF" stroke-width="1.6" stroke-linecap="round"/>'
+
 // A low pill on a gray rounded track: an optional icon first (SVG markup on a 16-unit square), then one square per
 // item in its color, or each group's count as bold digits; the first count shows even at 0, as the terminal's does.
 export function chip(parts: { n: number; color: string }[], asCounts: boolean, icon?: string, h = 16) {

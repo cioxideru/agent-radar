@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Shell, Stats, View } from '../types'
-import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, sparkline, stackBar } from './charts'
+import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, REMOTE_MARK, sparkline, stackBar } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
@@ -55,7 +55,7 @@ let t: Strings = STRINGS.en
 // Launcher icons: our own drawn marks for Claude and Codex, the same in the rows and the project pills. The apps'
 // icon files blur or turn into a plate at 10-16 px, and drawn marks need no app installed, on any system.
 const MARK: Record<'claude' | 'codex', string> = { claude: CLAUDE_MARK, codex: CODEX_MARK }
-const ICONS: Record<string, string> = Object.fromEntries(Object.entries(MARK).map(([k, m]) =>
+const ICONS: Record<string, string> = Object.fromEntries(Object.entries({ ...MARK, remote: REMOTE_MARK }).map(([k, m]) =>
   [k, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${m}</svg>`]))
 let home = ''
 // The system this runs on, read at session start; macOS has the Claude Desktop links and Terminal.
@@ -385,12 +385,14 @@ const ME = '#5aa9e640'
 const BAR_COLOR = { claude: '#D97757', codex: '#3cc4ae' }
 // The family filter labels in the header: the family colors a step more saturated, so they hold on a light pane.
 const LABEL = { claude: '#9466ee', codex: '#1fb59b' }
-// Desktop app launchers, written in their logo's color.
-const APPS: Record<string, { color: string }> = {
+// App launchers, written in their logo's color; `mark` when one has its own instead of the family's.
+const APPS: Record<string, { color: string; mark?: string }> = {
   'Claude Desktop': { color: '#D97757' },
   'Claude Code CLI': { color: '#D97757' },
+  'Remote Control': { color: '#D97757', mark: 'remote' },
   'Codex Desktop': { color: '#8B8CF8' },
 }
+const markOf = (a: Agent) => ICONS[APPS[a.how]?.mark ?? a.family]!
 // `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
 const W = { model: 11, modelShort: 9, cmodel: 11, eff: 6, effShort: 2, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
 
@@ -611,7 +613,7 @@ export const register: Register = (on, options) => {
     const off = new Set(view.off ?? [])
     const listed = list.filter(a => !off.has(a.family as 'claude' | 'codex') && (!view.runningOnly || a.status === 'running'))
     // Claude Desktop draws nothing at all past a couple of thousand elements: past MAX_ROWS the oldest ended rows go.
-    const keep = new Set([...listed].sort((x, y) => +ENDED.has(x.status) - +ENDED.has(y.status) || (y.t1 ?? now) - (x.t1 ?? now))
+    const keep = new Set([...listed].sort((x, y) => +ENDED.has(x.status) - +ENDED.has(y.status) || (y.live ? now : y.t1 ?? now) - (x.live ? now : x.t1 ?? now))
       .slice(0, MAX_ROWS).map(a => a.id))
     // A switched-off family's rows are no parents here; a running-only list still shows the parent of a running row.
     const shown = withParents(listed.filter(a => keep.has(a.id) || a.id === 'main' || a.id === view.sel), list.filter(a => !off.has(a.family)))
@@ -795,7 +797,7 @@ export const register: Register = (on, options) => {
       if (!Svg) return <Text color={color} dimColor={!app} wrap="truncate-end">{a.how}</Text>
       return (
         <Box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
-          <Svg source={ICONS[a.family]!} alt={a.family} width={16} height={16} />
+          <Svg source={markOf(a)} alt={app?.mark ? a.how : a.family} width={16} height={16} />
           <Text color={color} dimColor={!app} wrap="truncate-end">{mechanism(a.how)}</Text>
         </Box>
       )
@@ -815,7 +817,7 @@ export const register: Register = (on, options) => {
       // An app launcher's mark sits beside the title, its mechanism (Desktop, CLI) stays on the second line;
       // other launchers keep mark and mechanism together there.
       const app = APPS[a.how]
-      const icon = Svg && app && ICONS[a.family]
+      const icon = Svg && app && markOf(a)
       return (
         <Box key={'c' + k} flexDirection="column" paddingX={1} width="100%" backgroundColor={isSel && web ? SOFT.sel : undefined} {...(isSel && web ? ROUND_SEL : {})}>
           <Box flexDirection="row" gap={1} width="100%">

@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { REMOTE_MARK } from '../hooks/charts'
 
 test('pane draws a codex row with its columns on terminal and desktop', async ($, on) => {
   on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
@@ -245,6 +246,28 @@ test('background commands list the running ones by default, agent launches under
   expect(await ui.find({ text: /Active 2/ } as never)).toBeDefined()
   expect(await ui.find({ text: /Watch the build/ } as never)).toBeUndefined()
   await ui.unmount()
+})
+
+test('a chat Remote Control holds open stays listed under its own mark, past the row budget too', async ($, on) => {
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  const now = Date.now()
+  const quiet = { tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 864e5).toISOString(), mtime: now - 3600e3 }
+  mock.store(on, { allScan: { at: now, mins: 15, s: { codex: [], claude: [
+    { ...quiet, path: '/p/R.jsonl', title: 'Held chat', entry: 'remote-control', live: true },
+    { ...quiet, path: '/p/E.jsonl', title: 'Ended chat', entry: 'remote-control' },
+    ...Array.from({ length: 50 }, (_, i) => ({ path: `/p/n${i}.jsonl`, mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Newer ' + i })),
+  ] } } })
+  for (const [surface, bodyColumns] of [['desktop', 110], ['desktop', 50], ['terminal', 110]] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns } as never })
+    await ui.press({ key: 's-all' })
+    expect(await ui.find({ text: /Held chat/ } as never)).toBeDefined()
+    expect(await ui.find({ text: /Ended chat/ } as never)).toBeUndefined()
+    // find() ignores alt, so the drawings are picked out by hand.
+    const marks = (await ui.findAll({ type: 'Svg' } as never)) as unknown as { props: { alt?: string; source: string } }[]
+    if (surface === 'desktop') expect(marks.filter(m => m.props.alt === 'Remote Control' && m.props.source.includes(REMOTE_MARK)).length).toBe(1)
+    expect(await ui.find({ type: 'Text', text: /Remote Control/ })).toBeDefined()
+    await ui.unmount()
+  }
 })
 
 test('among all sessions a quiet session still heads its running subagent, so the subagent is never a root', async ($, on) => {

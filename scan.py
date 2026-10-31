@@ -160,6 +160,9 @@ def claude(p, mt):
     r['series'] = series([(when.get(k), u.get('output_tokens', 0)) for k, u in usage.items()])
     r['requests'], r['turns'] = len(usage), turns
     r['meta'] = meta(p)
+    # Remote Control leaves this file beside the journals of its chats, where it stays after they end.
+    if os.path.exists(p[:-6] + '/ccr-tip.json'):
+        r['entry'] = 'remote-control'
     # A chat Remote Control started keeps its title beside the journal, not in it.
     if 'title' not in r and os.path.exists(p[:-6] + '/custom-title.json'):
         r['title'] = (side(p[:-6] + '/custom-title.json') or {}).get('customTitle')
@@ -188,8 +191,8 @@ def alive(pid):
     return True
 
 def remote():
-    # The chats claude remote-control holds open: their journals have no entrypoint and go quiet between turns, so
-    # only the process records say they are alive. Desktop chats with Remote Control on carry a hostSessionId.
+    # The chats claude remote-control holds open: their journals go quiet between turns, so only the process records
+    # say they are alive. Desktop chats with Remote Control on carry a hostSessionId.
     recs = [side(p) or {} for p in files(H + '/.claude/sessions/*.json')]
     return {d['sessionId'] for d in recs if d.get('sessionId') and d.get('bridgeSessionId') and not d.get('hostSessionId') and alive(d.get('pid'))}
 

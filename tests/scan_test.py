@@ -61,6 +61,10 @@ with tempfile.TemporaryDirectory() as home:
     json.dump({'customTitle': 'Held'}, open(P + 'R1/custom-title.json', 'w'))
     write(P + 'R2.jsonl', [user], OLD)
     write(P + 'R3.jsonl', [user], OLD)
+    # One that has ended keeps its marker beside the journal, and so its label.
+    write(P + 'R4.jsonl', [user], FRESH)
+    os.makedirs(P + 'R4')
+    json.dump({'eventId': 'e'}, open(P + 'R4/ccr-tip.json', 'w'))
     gone = subprocess.Popen([sys.executable, '-c', ''])
     gone.wait()
     os.makedirs(home + '/.claude/sessions')
@@ -72,6 +76,7 @@ with tempfile.TemporaryDirectory() as home:
     assert 'R2.jsonl' not in held and 'R3.jsonl' not in held, sorted(held)
     assert held['R1.jsonl']['live'] and held['R1.jsonl']['entry'] == 'remote-control' and held['R1.jsonl']['title'] == 'Held', held['R1.jsonl']
     assert not held['S1.jsonl']['live']
+    assert not held['R4.jsonl']['live'] and held['R4.jsonl']['entry'] == 'remote-control', held['R4.jsonl']
     for f in os.listdir(home + '/.claude/sessions'):
         os.remove(home + '/.claude/sessions/' + f)
     assert 'R1.jsonl' not in {r['path'].split('/')[-1] for r in scan(home, 'all', '15', stdin=json.dumps({'claude': list(held.values())}))['claude']}
