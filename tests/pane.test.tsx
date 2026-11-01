@@ -312,6 +312,9 @@ function session(on: On) {
     scan: { codex: [], claude: [], dirs: [DAY], watch: [] } as Record<string, unknown>,
     kin: [] as unknown[],
     modes: () => world.runs.map(r => r[0]!.split(':')[0]!),
+    inputs: [] as string[],
+    flags: [] as string[],
+    uname: 'Darwin',
   }
   const entry = (p: string) => ({ name: p.split('/').pop()!, kind: 'file', size: world.disk[p]![0], mtimeMs: world.disk[p]![1], isLink: false })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -340,9 +343,13 @@ function session(on: On) {
   })
   on('process.run', (_, e) => {
     const argv = (e as { argv: string[] }).argv
-    if (argv[0] === 'uname') return { value: { exitCode: 0, stdout: 'Darwin', stderr: '' } } as never
-    world.runs.push(argv.slice(4))
-    const answer = argv[4] === 'ended' ? { done: {}, at: {}, bg: [] } : argv[4]!.startsWith('codex:') ? { codex: [], claude: world.kin } : world.scan
+    if (argv[0] === 'uname') return { value: { exitCode: 0, stdout: world.uname, stderr: '' } } as never
+    const code = argv.indexOf('-c')
+    world.flags = argv.slice(1, code)
+    world.runs.push(argv.slice(code + 2))
+    world.inputs.push(String((e as { init?: { stdin?: string } }).init?.stdin))
+    const mode = argv[code + 2]!
+    const answer = mode === 'ended' ? { done: {}, at: {}, bg: [] } : mode.startsWith('codex:') ? { codex: [], claude: world.kin } : world.scan
     return { value: { exitCode: 0, stdout: JSON.stringify(answer), stderr: '' } } as never
   })
   return world
@@ -580,4 +587,39 @@ test('with Finished on, a session this one started that went quiet past the shar
   await clock.advance(30000)
   expect(w.modes().filter(m => m === 'codex')).toHaveLength(1)
   await ui.unmount()
+})
+
+test('a scan runs isolated, and on a Mac with a folder for the bytecode the system Python cannot keep beside its library', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  await $.session.start(START)
+  await clock.advance(3000)
+  expect(w.flags).toEqual(['-I', '-S', '-X', 'pycache_prefix=/h/Library/Caches/agent-radar'])
+})
+
+test('elsewhere a scan needs no such folder', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  w.uname = 'Linux'
+  await $.session.start(START)
+  await clock.advance(3000)
+  expect(w.flags).toEqual(['-I', '-S'])
+})
+
+test("what the scan said of Desktop's records stays with this chat, for the next scan and out of the store", async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  w.scan.records = { '/d/local_1.json': { mtime: 1, size: 2 } }
+  await $.session.start(START)
+  await clock.advance(3000)
+  expect(w.modes()).toContain('all')
+  expect(JSON.stringify(w.store.allScan)).not.toContain('local_1')
+  w.disk[DAY + '/rollout-b.jsonl'] = [10, Date.now()]
+  await clock.advance(3000)
+  // The rollouts' own read opens no record.
+  expect(w.modes().at(-1)).toBe('only')
+  expect(w.inputs.at(-1)).not.toContain('local_1')
+  await clock.advance(60000)
+  expect(w.modes().at(-1)).toBe('all')
+  expect(w.inputs.at(-1)).toContain('local_1')
 })

@@ -9,7 +9,8 @@ import { SCAN_PY } from './scan'
 type $ = EngineInterface
 // dirs: the folders a new rollout lands in; watch: the folders of Desktop's records; titles: Desktop's title of each
 // live session, by its id.
-type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string> }
+// records: what Desktop's records say, which the next scan need not read again; it stays with this chat, out of the store.
+type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string>; records?: unknown }
 // The machine-wide scan both tabs draw from, as it lies in the shared store. `v` tells this shape: a chat still on an
 // older mod writes none, a newer one another number, and each scans for itself rather than read the other's.
 type Shared = { v: number; at: number; mins: number; s: Scan }
@@ -112,6 +113,8 @@ let lastProj: Scan | undefined
 let own = new Map<string, Rec>()
 // The sessions it started that went quiet past the shared window, while its Finished rows are on.
 let kin: Rec[] = []
+// What the last scan read of Desktop's records.
+let records: unknown
 // What its files looked like at the last look: path → size and time.
 let seen = new Map<string, string>()
 // The status line last sent; '' so the first poll of a load clears what the one before left.
@@ -173,14 +176,21 @@ const blank = (id: string, now: number): Agent => ({
   model: '', family: 'claude', tokIn: 0, tokOut: 0, t0: now, status: 'running', how: 'Agent',
 })
 
+// Apple's Python keeps its bytecode in a folder of the user's, and -I turns that off: its library has none and is
+// read-only, so every start compiled 34 modules from source, half of what a scan costs. This flag brings it back in a
+// folder of the mod's own. Any other Python just keeps a copy there, and one it cannot write leaves things as they were.
 async function py($: $, args: string[], stdin = '{}') {
-  const r = await $.process.run([os === 'win' ? 'python' : 'python3', '-I', '-c', SCAN_PY, ...args], { timeoutMs: 20000, stdin })
+  const cache = os === 'mac' ? ['-X', `pycache_prefix=${home}/Library/Caches/agent-radar`] : []
+  const r = await $.process.run([os === 'win' ? 'python' : 'python3', '-I', '-S', ...cache, '-c', SCAN_PY, ...args], { timeoutMs: 20000, stdin })
   return r.exitCode === 0 ? JSON.parse(r.stdout) : undefined
 }
 // 'codex:<id>' adds the Desktop sessions that session started. `last`, the previous scan, goes in on stdin: a journal
-// unchanged since (same mtime and size) is taken from it unread.
-const scan = async ($: $, mode: string, mins: number, extra: string[], last?: Scan): Promise<Scan> =>
-  ((await py($, [mode, String(mins), ...extra], JSON.stringify(last ?? {}))) as Scan | undefined) ?? { codex: [], claude: [] }
+// unchanged since (same mtime and size) is taken from it unread, and so is a Desktop record by the `records` kept here.
+async function scan($: $, mode: string, mins: number, extra: string[], last?: Scan): Promise<Scan> {
+  const r = (await py($, [mode, String(mins), ...extra], JSON.stringify({ ...last, records: mode === 'only' ? undefined : records }))) as Scan | undefined
+  if (r?.records) (records = r.records), delete r.records
+  return r ?? { codex: [], claude: [] }
+}
 
 // A background `codex exec` with no rollout of its own (`codex exec resume` writes into an old one) ends only when
 // the session is told its task ended: the notification names the Bash call by its tool_use_id.

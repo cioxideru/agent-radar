@@ -6,7 +6,7 @@ now = time.time()
 # Paths use / on every system, so the mod can split them the same way on Windows.
 H = os.path.expanduser('~').replace(os.sep, '/')
 # The last scan's rows, by path, from stdin: a journal unchanged since (same mtime and size) is taken from it unread.
-cache = {}
+cache, last = {}, {}
 try:
     last = json.load(sys.stdin) if not sys.stdin.isatty() else {}
     cache = {r['path']: r for k in ('codex', 'claude') for r in (last.get(k) or [])}
@@ -223,25 +223,26 @@ if mode == 'ended':
     print(json.dumps({'done': done, 'at': at, 'bg': bg}))
     sys.exit()
 
-def desktop(only=None):
+def desktop():
     # Claude Desktop keeps one record per session: its own id (what claude:// links take), the CLI transcript id, the
-    # folder it was opened in and the session that started it. With only (a CLI session id), just that session's
-    # record and the records of the sessions it started are read, which keeps the 3 s poll light.
+    # folder it was opened in and the session that started it. What a record says comes back in 'records' and goes in
+    # with the next scan: unchanged (same mtime and size) it is not read again, 200 files being a scan's largest part.
     A = {'darwin': H + '/Library/Application Support', 'win32': os.environ.get('APPDATA', '').replace(os.sep, '/')}.get(sys.platform, H + '/.config') + '/Claude/'
-    texts = [(p, open(p, errors='replace').read()) for p in files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True)]
+    paths = files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True)
     # The mod looks at these between scans: Desktop replaces a record to change it, so the folder's time tells of any.
-    out['watch'] = sorted({os.path.dirname(p) for p, s in texts})
-    if only is not None:
-        ids = {only} | {load(s).get('sessionId') for p, s in texts if only in s}
-        texts = [(p, s) for p, s in texts if any(i and i in s for i in ids)]
-    recs, cli = [], {}
-    for p, s in texts:
-        d = load(s)
-        if d.get('cliSessionId'):
-            cli[d.get('sessionId')] = d['cliSessionId']
-            recs.append((d, 'code' if 'claude-code-sessions' in p else 'work'))
-    return {d['cliSessionId']: {'id': d.get('sessionId'), 'kind': k, 'cwd': d.get('cwd'), 'title': d.get('title'), 'parent': cli.get((d.get('spawnedFrom') or {}).get('sessionId'))}
-            for d, k in recs if not d.get('isArchived')}
+    out['watch'] = sorted({os.path.dirname(p) for p in paths})
+    kept, recs = last.get('records') or {}, {}
+    for p, st in stats(paths).items():
+        r = kept.get(p)
+        if not r or r['mtime'] != st.st_mtime or r['size'] != st.st_size:
+            d = side(p) or {}
+            r = {'mtime': st.st_mtime, 'size': st.st_size, 'id': d.get('sessionId'), 'cli': d.get('cliSessionId'), 'cwd': d.get('cwd'), 'title': d.get('title'),
+                 'from': (d.get('spawnedFrom') or {}).get('sessionId'), 'off': bool(d.get('isArchived')), 'kind': 'code' if 'claude-code-sessions' in p else 'work'}
+        recs[p] = r
+    out['records'] = recs
+    cli = {r['id']: r['cli'] for r in recs.values() if r['cli']}
+    return {r['cli']: {'id': r['id'], 'kind': r['kind'], 'cwd': r['cwd'], 'title': r['title'], 'parent': cli.get(r['from'])}
+            for r in recs.values() if r['cli'] and not r['off']}
 
 def withDesk(r, desk):
     r['desktop'] = desk.get(os.path.basename(r['path'].split('/subagents/')[0])[:36].replace('.jsonl', ''))
@@ -280,17 +281,16 @@ while want:
     seen |= want
     out['codex'] += [parse(p, st, codex) for p, st in found.items()]
     want = {r['parent'] for r in out['codex'] if r.get('parent') and r['parent'] not in seen}
-names = {}
 try:
-    for l in open(H + '/.codex/session_index.jsonl', errors='replace'):
-        d = load(l)
-        if d.get('thread_name'):
-            names[d.get('id')] = d['thread_name']
+    index = open(H + '/.codex/session_index.jsonl', errors='replace').read()
 except OSError:
-    pass
+    index = ''
 for r in out['codex']:
-    if names.get(r.get('id')):
-        r['title'] = names[r['id']]
+    # Its name is on the last line that gives its id: searched for, not parsed, since few rollouts ask of many lines.
+    at = index.rfind('"' + str(r.get('id')) + '"')
+    name = load(index[index.rfind('\n', 0, at) + 1:].split('\n', 1)[0]).get('thread_name') if at >= 0 else None
+    if name:
+        r['title'] = name
 if mode == 'all':
     desk = desktop()
     procs = [side(p) or {} for p in files(H + '/.claude/sessions/*.json')]
@@ -311,7 +311,7 @@ if mode == 'all':
             r['entry'] = 'remote-control'
         out['claude'].append(r)
 elif me:
-    desk = desktop(me)
+    desk = desktop()
     # The title Claude Desktop gives this session, so its row reads as it does among all sessions.
     out['title'] = (desk.get(me) or {}).get('title')
     for sid, d in desk.items():

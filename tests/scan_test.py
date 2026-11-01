@@ -1,6 +1,6 @@
 """Self-check of scan.py on fictional journals in a temporary home: quiet parents are read for their active children
 (a session for its subagent, an agent for a nested one, a Codex thread for its child), a chat Remote Control holds
-open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, and every live session's Desktop title comes with the scan of all. Run: python3 -I tests/scan_test.py"""
+open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, every live session's Desktop title comes with the scan of all, a session's own scan finds what it started, a Desktop record unchanged is not read again, and a thread's name is its last. Run: python3 -I tests/scan_test.py"""
 import json, os, subprocess, sys, tempfile, time, datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,4 +103,26 @@ with tempfile.TemporaryDirectory() as home:
     assert both['titles'] == {'S2': 'Quiet chat'}, both['titles']
     assert both['watch'] == [A[:-1]], both['watch']
     assert 'S2.jsonl' not in {r['path'].split('/')[-1] for r in both['claude']}
+
+    # A session's own scan: its Desktop title and the sessions it started, an archived one left out.
+    json.dump({'sessionId': 'local_3', 'cliSessionId': 'S1', 'title': 'Child', 'cwd': '/x/Proj', 'spawnedFrom': {'sessionId': 'local_1'}}, open(A + 'local_3.json', 'w'))
+    json.dump({'sessionId': 'local_4', 'cliSessionId': 'R1', 'title': 'Shelved', 'isArchived': True, 'spawnedFrom': {'sessionId': 'local_1'}}, open(A + 'local_4.json', 'w'))
+    mine = scan(home, 'codex:S2', '5')
+    assert mine['title'] == 'Quiet chat', mine['title']
+    assert [(r['path'].split('/')[-1], r['desktop']['parent']) for r in mine['claude']] == [('S1.jsonl', 'S2')], mine['claude']
+
+    # What a record said comes back in 'records': unchanged it is not read again; changed it is, and gone it is gone.
+    kept = json.loads(json.dumps(mine['records']))
+    assert set(kept) == {A + 'local_%d.json' % i for i in (1, 2, 3, 4)}, sorted(kept)
+    kept[A + 'local_1.json']['title'] = 'CACHED'
+    assert scan(home, 'all', '15', stdin=json.dumps({'records': kept}))['titles'] == {'S2': 'CACHED'}
+    json.dump({'sessionId': 'local_1', 'cliSessionId': 'S2', 'title': 'Renamed', 'cwd': '/x/Proj'}, open(A + 'local_1.json', 'w'))
+    os.remove(A + 'local_2.json')
+    fresh = scan(home, 'all', '15', stdin=json.dumps({'records': kept}))
+    assert fresh['titles'] == {'S2': 'Renamed'} and A + 'local_2.json' not in fresh['records'], fresh['titles']
+
+    # A thread's name: the last line that gives its id; a line that is no JSON is passed over.
+    with open(home + '/.codex/session_index.jsonl', 'w') as f:
+        f.write('{"id":"T1","thread_name":"Old"}\nnot json\n{"id":"T2","thread_name":"Other"}\n{"id":"T1","thread_name":"New"}')
+    assert {r['id']: r['title'] for r in scan(home, 'all', '15')['codex']} == {'T1': 'New', 'T2': 'Other'}
     print('scan.py: ok')
