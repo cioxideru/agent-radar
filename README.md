@@ -59,7 +59,7 @@ claude plugin marketplace add cioxideru/agent-radar
 claude plugin install agent-radar@agent-radar --scope user
 ```
 
-The pane opens by itself when a session starts, and opening or closing it by hand in one chat does the same in the others within a few seconds. After you close it, new sessions start without it until `/agent-radar` opens it again.
+The pane opens by itself when a session starts, and opening or closing it by hand in one chat does the same in the others within about ten seconds. After you close it, new sessions start without it until `/agent-radar` opens it again.
 
 ### Update and remove
 
@@ -112,7 +112,7 @@ There is no server and no network access. The mod runs inside Claude Code and re
 | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `~/.codex/session_index.jsonl` | Codex runs: model, effort, tokens, context, rate limits, titles |
 | `~/Library/Application Support/Claude/claude-code-sessions` (`%APPDATA%\Claude` on Windows) | which sessions belong to Claude Desktop, for the *open chat* link |
 
-A small Python scanner (`scan.py`, embedded in `hooks/scan.ts`) reads the journals every 3 s for this session and every 10 s for all sessions, only while the pane is open; a journal unchanged since the last scan is not read again, and chats share one *All* scan through the mod's store instead of each reading the same journals. A quiet session whose subagent still works is read along with it, so the subagent is drawn under it and never as a root of its own.
+A small Python scanner (`scan.py`, embedded in `hooks/scan.ts`) reads the journals, for all sessions every 10 s while that tab is open. For this session the mod looks at file sizes and times every 3 s and starts the scanner only when a file its list depends on has changed, and once a minute otherwise. Nothing is read while no surface draws the pane; a journal unchanged since the last scan is not read again, and chats share one *All* scan through the mod's store instead of each reading the same journals. A quiet session whose subagent still works is read along with it, so the subagent is drawn under it and never as a root of its own.
 
 ## Development
 

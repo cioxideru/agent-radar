@@ -232,7 +232,10 @@ def desktop(only=None):
     texts = [(p, open(p, errors='replace').read()) for p in files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True)]
     if only is not None:
         ids = {only} | {load(s).get('sessionId') for p, s in texts if only in s}
+        folders = {os.path.dirname(p) for p, s in texts}
         texts = [(p, s) for p, s in texts if any(i and i in s for i in ids)]
+        # What the mod looks at before starting this scan again: a folder's time moves when a record comes or goes.
+        out['watch'] = sorted(folders) + [p for p, s in texts]
     recs, cli = [], {}
     for p, s in texts:
         d = load(s)
@@ -265,8 +268,8 @@ def parents(paths, desk):
                 out.update(files(H + '/.claude/projects/*/' + d['parent'] + '.jsonl'))
     return out - set(paths)
 
-out = {'codex': [], 'claude': []}
 days = {(datetime.date.today() - datetime.timedelta(days=i)).strftime('%Y/%m/%d') for i in (0, 1)}
+out = {'codex': [], 'claude': [], 'dirs': [H + '/.codex/sessions/' + d for d in sorted(days)]}
 cx = [p for d in days for p in files(H + '/.codex/sessions/' + d + '/rollout-*.jsonl')] + extra
 for p, st in recent(set(cx)).items():
     out['codex'].append(parse(p, st, codex))

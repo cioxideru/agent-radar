@@ -1,3 +1,4 @@
+import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { REMOTE_MARK } from '../hooks/charts'
 
@@ -288,4 +289,166 @@ test('among all sessions a quiet session still heads its running subagent, so th
     expect(await ui.find(surface === 'desktop' ? { type: 'Svg', alt: 'proj' } as never : { type: 'Text', text: /^■$/ })).toBeDefined()
     await ui.unmount()
   }
+})
+
+// A session under a test clock: the folders in `disk` (path → size and time, a folder's files by their full path),
+// the pane as `pane` says, and every Python start in `runs`. The scanner's answer is what `scan` holds.
+const DAY = '/h/.codex/sessions/2026/11/01'
+const SID = 'S1'
+function session(on: On) {
+  const world = {
+    disk: {} as Record<string, [number, number]>,
+    pane: { id: 'agent-radar', title: 'Agent Radar', isShown: true, isFocused: false, isPlaced: true },
+    runs: [] as string[][],
+    lists: 0,
+    statuses: 0,
+    scan: { codex: [], claude: [], dirs: [DAY] } as Record<string, unknown>,
+  }
+  const entry = (p: string) => ({ name: p.split('/').pop()!, kind: 'file', size: world.disk[p]![0], mtimeMs: world.disk[p]![1], isLink: false })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: '/x/Proj' }))
+  on('session.id', () => ({ value: SID }))
+  on('session.usage', () => ({ value: { context: { tokens: 10, window: 100 } } }) as never)
+  on('command.register', () => ({ value: { command: 'agent-radar' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [world.pane] }))
+  on('ui.status', () => { world.statuses++; return { value: undefined } as never })
+  on('agent.list', () => ({ value: [] }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/h' : undefined }) as never)
+  on('fs.read', () => ({ value: '{"version":"1"}' }) as never)
+  on('fs.list', (_, e) => {
+    const dir = (e as { path: string }).path
+    world.lists++
+    if (dir !== DAY) throw new Error('ENOENT')
+    return { value: Object.keys(world.disk).filter(p => p.startsWith(dir + '/')).map(entry) } as never
+  })
+  on('fs.stat', (_, e) => {
+    const p = (e as { path: string }).path
+    if (!world.disk[p]) throw new Error('ENOENT')
+    return { value: entry(p) } as never
+  })
+  on('process.run', (_, e) => {
+    const argv = (e as { argv: string[] }).argv
+    if (argv[0] === 'uname') return { value: { exitCode: 0, stdout: 'Darwin', stderr: '' } } as never
+    world.runs.push(argv.slice(4))
+    return { value: { exitCode: 0, stdout: JSON.stringify(argv[4] === 'ended' ? { done: {}, at: {}, bg: [] } : world.scan), stderr: '' } } as never
+  })
+  return world
+}
+const START = { cwd: '/x/Proj', surface: 'desktop', isInteractive: true } as never
+
+test('a quiet session starts Python once a minute, and a changed file within one beat', async ($, on) => {
+  const clock = mock.clock(on, { now: 1000 })
+  mock.store(on)
+  const w = session(on)
+  await $.session.start(START)
+  // Load: the scan and one look back through the journal.
+  await clock.advance(6000)
+  const scans = () => w.runs.filter(r => r[0] !== 'ended').length
+  expect(scans()).toBe(1)
+  expect(w.runs).toHaveLength(2)
+  await clock.advance(30000)
+  expect(scans()).toBe(1)
+  // A new rollout is seen at the next beat.
+  w.disk[DAY + '/rollout-a.jsonl'] = [10, Date.now()]
+  await clock.advance(3000)
+  expect(scans()).toBe(2)
+  await clock.advance(21000)
+  expect(scans()).toBe(2)
+  // The minute since the last scan: what no file tells, a new day or a rollout leaving the window.
+  await clock.advance(39000)
+  expect(scans()).toBe(3)
+})
+
+test("another project's rollout is no reason to start Python; this project's is", async ($, on) => {
+  const clock = mock.clock(on, { now: 1000 })
+  mock.store(on)
+  const w = session(on)
+  const rec = (name: string, cwd: string) => ({ path: `${DAY}/${name}`, id: name, cwd, mtime: Date.now(), tokIn: 1, tokOut: 1, model: 'gpt-6' })
+  w.scan.codex = [rec('other.jsonl', '/x/Other'), rec('here.jsonl', '/x/Proj/sub')]
+  w.disk[`${DAY}/other.jsonl`] = [1, Date.now()]
+  w.disk[`${DAY}/here.jsonl`] = [1, Date.now()]
+  await $.session.start(START)
+  await clock.advance(9000)
+  const before = w.runs.length
+  w.disk[`${DAY}/other.jsonl`] = [2, Date.now()]
+  await clock.advance(3000)
+  expect(w.runs.length).toBe(before)
+  w.disk[`${DAY}/here.jsonl`] = [2, Date.now()]
+  await clock.advance(3000)
+  expect(w.runs.length).toBe(before + 1)
+})
+
+test('an unfinished rollout outside the day folders is read as it grows', async ($, on) => {
+  const clock = mock.clock(on, { now: 1000 })
+  mock.store(on)
+  const w = session(on)
+  const old = '/h/.codex/sessions/2026/10/20/rollout-old.jsonl'
+  w.disk[old] = [1, Date.now() - 3600e3]
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' } }) as never)
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6 "Review the diff please"', description: 'Diff review', run_in_background: true })
+  w.scan.codex = [{ path: old, id: 'T1', cwd: '/x/Proj', mtime: Date.now(), tokIn: 1, tokOut: 1, model: 'gpt-6', originator: 'codex_exec', t0: new Date().toISOString() }]
+  await clock.advance(9000)
+  const before = w.runs.length
+  await clock.advance(9000)
+  expect(w.runs.length).toBe(before)
+  w.disk[old] = [2, Date.now()]
+  await clock.advance(3000)
+  expect(w.runs.length).toBe(before + 1)
+  // The extra rollout went in to the scan that read it.
+  expect(w.runs.at(-1)!.includes(old)).toBe(true)
+})
+
+test('a pane no surface draws reads nothing, and one behind a tab looks every fifth beat while nothing goes on', async ($, on) => {
+  const clock = mock.clock(on, { now: 1000 })
+  mock.store(on)
+  const w = session(on)
+  w.pane = { ...w.pane, isPlaced: false, isShown: false }
+  await $.session.start(START)
+  await clock.advance(120000)
+  expect(w.runs).toHaveLength(0)
+  expect(w.lists).toBe(0)
+  // Placed behind another pane: the disk is looked at every fifth beat.
+  w.pane = { ...w.pane, isPlaced: true }
+  await clock.advance(30000)
+  expect(w.lists).toBeLessThanOrEqual(2)
+  // Back on show: every beat.
+  w.pane = { ...w.pane, isShown: true }
+  const before = w.lists
+  await clock.advance(15000)
+  expect(w.lists - before).toBeGreaterThanOrEqual(5)
+})
+
+test('with nothing changed nothing is written, the status is not sent again, and a shown pane still moves its clocks', async ($, on) => {
+  const clock = mock.clock(on, { now: 1000 })
+  mock.store(on)
+  const w = session(on)
+  const writes: Record<string, number> = {}
+  on('state.set', (($: unknown, e: { key: string }, next: (e: unknown) => unknown) => { writes[e.key] = (writes[e.key] ?? 0) + 1; return next(e) }) as never)
+  await $.session.start(START)
+  await clock.advance(12000)
+  const agentsBefore = writes.agents ?? 0, tickBefore = writes.tick ?? 0, statusBefore = w.statuses
+  await clock.advance(30000)
+  expect(writes.agents ?? 0).toBe(agentsBefore)
+  expect(w.statuses).toBe(statusBefore)
+  // An idle list's minutes: every fifth beat, the one write there is.
+  expect((writes.tick ?? 0) - tickBefore).toBe(2)
+})
+
+test('closing the pane in another chat arrives within twelve seconds, and the store is asked no oftener', async ($, on) => {
+  const clock = mock.clock(on, { now: 1000 })
+  const w = session(on)
+  let open: unknown = true, gets = 0, closes = 0
+  on('store.get', () => { gets++; return { value: open } })
+  on('store.set', () => ({ value: undefined }) as never)
+  on('ui.close', () => { closes++; return { value: undefined } as never })
+  await $.session.start(START)
+  await clock.advance(36000)
+  gets = 0
+  await clock.advance(36000)
+  expect(gets).toBe(3)
+  open = false
+  await clock.advance(12000)
+  expect(closes).toBe(1)
 })

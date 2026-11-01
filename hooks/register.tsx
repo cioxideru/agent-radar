@@ -7,7 +7,8 @@ import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
 type $ = EngineInterface
-type Scan = { codex: Rec[]; claude: Rec[]; title?: string }
+// dirs: the folders a new rollout lands in; watch: the Desktop folder and records this session's own scan reads.
+type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[] }
 type Rec = {
   path: string; mtime: number; size?: number; tokIn: number; tokOut: number; cwd?: string; t0?: string
   model?: string; effort?: string; title?: string
@@ -39,6 +40,8 @@ const MAX_SHELLS = 20
 const ENDED = new Set(['completed', 'failed', 'killed'])
 // Minutes since its last activity a row still counts as current, in both scopes; "Finished" shows the rest.
 const ACTIVE_MIN = 15
+// How far back this session's own scan looks.
+const PROJ_MIN = 5
 // ponytail: a fixed row budget (30 drew, 89 did not); pages or a "show more" if people want the old ones back.
 const MAX_ROWS = 40
 const EFF = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -84,8 +87,21 @@ let compactAt = 0
 let polling = false
 let lastAll = 0
 let allRun: Promise<void> | undefined
+// The 3 s clock's beats, and the beat of the last own scan: a quiet session rescans once a minute.
+let beat = 0
+let scanBeat = 0
+const REFRESH_BEATS = 20
+// The store's `open` is asked every 12 s, and a session with nothing going on and its pane behind a tab polls every 15 s.
+const SYNC_BEATS = 4
+const IDLE_BEATS = 5
+// Whether a surface draws the pane: nobody is looking while it does not, so neither timer does any work.
+let placed = false
 // The last scan of this session's own: its rows seed the next, so a journal unchanged since is not read again.
 let lastProj: Scan | undefined
+// What that scan's files looked like: path → size and time, from the listing taken before it ran.
+let seen = new Map<string, string>()
+// The status line last sent; '' so the first poll of a load clears what the one before left.
+let lastStatus: string | undefined = ''
 // Whether this load has looked in its journal for background Codex runs that ended while no hook was listening.
 let swept = false
 
@@ -127,6 +143,9 @@ export function parseCodex(cmd: string) {
   return { model, effort, prompt }
 }
 
+// A write draws the pane again, so what did not change is not written.
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
 async function upsert($: $, id: string, patch: Partial<Agent>, base?: Agent) {
   await update($, agents, list => {
     const i = list.findIndex(a => a.id === id)
@@ -164,6 +183,39 @@ const inRoot = (cwd = '') => cwd === root || cwd.startsWith(root + '/') || cwd.s
 const codexStatus = (r: Rec, now: number) =>
   (r.started ?? 0) > 0 && (r.done ?? 0) >= (r.started ?? 0) ? 'completed' : now - r.mtime < 60e3 ? 'running' : 'idle'
 
+// A rollout this session's list has no use for: another project's, nobody here launched it, and no thread above it
+// is ours. Its writes are no reason to start Python. One whose first line is not there yet has no folder and counts.
+function foreign(s: Scan, rows: Agent[]) {
+  const byThread = new Map(s.codex.map(r => [r.id, r]))
+  const mine = (r: Rec, depth = 0): boolean => {
+    if (!r.cwd || inRoot(r.cwd) || r.launch || rows.some(a => a.rollout === r.path)) return true
+    const up = r.parent ? byThread.get(r.parent) : undefined
+    return !!up && depth < 8 && mine(up, depth + 1)
+  }
+  return new Set(s.codex.filter(r => !mine(r)).map(r => r.path))
+}
+
+// The files this session's list hangs on that changed since the last look, told by the file system for a fraction of
+// a Python start: the rollouts of today and yesterday active within the scan's window, the Desktop folder and records,
+// the journals of the sessions this one started, and the open rollouts wherever they lie (`extra`). A folder of Desktop
+// records takes 6 ms to list, so it is watched by its own time and only this session's records are looked at.
+async function changed($: $, s: Scan, rows: Agent[], extra: string[], now: number) {
+  const open = new Set(extra)
+  const cur = new Map<string, string>()
+  for (const d of s.dirs ?? [])
+    for (const e of await $.fs.list(d).catch(() => []))
+      if (now - e.mtimeMs <= PROJ_MIN * 60e3 || open.has(`${d}/${e.name}`)) cur.set(`${d}/${e.name}`, `${e.size}:${e.mtimeMs}`)
+  for (const p of [...(s.watch ?? []), ...s.claude.map(r => r.path), ...extra]) {
+    if (cur.has(p)) continue
+    const e = await $.fs.stat(p).catch(() => undefined)
+    if (e) cur.set(p, `${e.size}:${e.mtimeMs}`)
+  }
+  const skip = foreign(s, rows)
+  const out = [...cur].filter(([p, v]) => seen.get(p) !== v && !skip.has(p)).map(([p]) => p)
+  seen = cur
+  return out
+}
+
 async function pollProject($: $) {
   const now = Date.now()
   const live = new Map((await $.agent.list()).map(a => [a.id, a.status as string]))
@@ -171,9 +223,16 @@ async function pollProject($: $) {
   const extra = list.filter(a => a.rollout && !ENDED.has(a.status)).map(a => a.rollout!)
   const me = (await Promise.resolve().then(() => $.session.id()).catch(() => undefined)) || sessionId
   // After a resume or /clear the process goes on under another id: the session's own row follows it.
-  if (me !== sessionId) await upsert($, 'main', { sid: (sessionId = me), journal: journalOf(root, me) })
-  lastProj = await scan($, 'codex:' + me, 5, extra, lastProj)
-  const { claude, title } = lastProj
+  const moved = me !== sessionId
+  if (moved) await upsert($, 'main', { sid: (sessionId = me), journal: journalOf(root, me) })
+  // Python only when a file it would read has changed, and once a minute for what no file here tells: a new day, a
+  // rollout leaving the window, a thread's name. Statuses that age with the clock are worked out from the last scan.
+  const diff = lastProj ? await changed($, lastProj, list, extra, now) : []
+  if (!lastProj || moved || diff.length || beat - scanBeat >= REFRESH_BEATS) {
+    scanBeat = beat
+    lastProj = await scan($, 'codex:' + me, PROJ_MIN, extra, lastProj)
+  }
+  const { claude, title } = lastProj!
   if (title && title !== list.find(a => a.id === 'main')?.title) await upsert($, 'main', { title })
   // Once a load: what this session's journal says ended while no hook was listening (a resume, a reload), and the
   // background commands it ran before.
@@ -182,20 +241,26 @@ async function pollProject($: $) {
   if (past) await update($, shells, l => pastShells(l, past))
   // Desktop sessions this one started sit under it, as Claude Desktop draws them.
   const kids = claude.map(r => ({ ...claudeRow(r, now), parentId: 'main' }))
-  const s = lastProj
-  await update($, agents, cur => mergeProject(cur, s, kids, live, past?.done ?? {}, now))
+  const s = lastProj!
+  const merged = (cur: Agent[]) => mergeProject(cur, s, kids, live, past?.done ?? {}, now)
+  const cur = await read($, agents)
+  if (!same(merged(cur), cur)) await update($, agents, merged)
 
   const usage = await $.session.usage(now - compactAt > 60e3 ? { breakdown: 'summary' } : undefined).catch(() => undefined)
   if (usage) {
     const raw = usage.context.breakdown?.rawMaxTokens
     if (raw) (compactWindow = raw), (compactAt = now)
     claudeWindow = compactWindow || usage.context.window
-    await upsert($, 'main', { stats: { ctx: usage.context.tokens, ctxWindow: claudeWindow, lastAt: now } })
+    const was = list.find(a => a.id === 'main')?.stats
+    if (was?.ctx !== usage.context.tokens || was?.ctxWindow !== claudeWindow)
+      await upsert($, 'main', { stats: { ctx: usage.context.tokens, ctxWindow: claudeWindow, lastAt: now } })
   }
   const rows = await read($, agents)
   const running = rows.filter(a => a.status === 'running' && a.id !== 'main').length
   const tok = rows.reduce((s, a) => s + a.tokIn + a.tokOut, 0)
-  $.ui.status(running ? t.statusLine(running, fmtK(tok)) : undefined)
+  const status = running ? t.statusLine(running, fmtK(tok)) : undefined
+  // Each call is a message to the host.
+  if (status !== lastStatus) $.ui.status((lastStatus = status))
 }
 
 // This session's list after a poll: the hooks' rows brought up to date from the live agents (`live`: id → status) and
@@ -351,7 +416,8 @@ async function scanAll($: $) {
   const fresh = kept && kept.mins === mins && Date.now() - kept.at < 9e3
   const s = fresh ? kept.s : await scan($, 'all', mins, [], kept?.s)
   if (!fresh) await $.store.set('allScan', { at: Date.now(), mins, s }).catch(() => {})
-  await update($, others, () => fromScan(s, Date.now()))
+  const rows = fromScan(s, Date.now())
+  if (!same(rows, await read($, others))) await update($, others, () => rows)
 }
 
 // Depth-first order with each child under its parent; a row whose parent is not shown becomes a root.
@@ -419,6 +485,30 @@ async function syncPane($: $) {
   if (!want && up) await $.ui.close({ id: PANE })
 }
 
+// Nothing is read while no surface draws the pane: closed in this chat, on a terminal too narrow for it, or a Desktop
+// session no window shows (the app detaches from those). Behind another tab with nothing going on it looks every
+// fifth beat. A shown pane's clocks move with no write to draw them, so `tick` does: every second while an agent runs
+// (the 1 s timer), every beat for a background command, every fifth beat for the minutes of an idle list.
+async function poll($: $) {
+  if (polling) return
+  polling = true
+  try {
+    const pane = (await $.ui.panes()).find(p => p.id === PANE)
+    placed = !!pane?.isPlaced
+    if (!pane?.isPlaced) return
+    const rows = await read($, agents)
+    const running = rows.some(a => a.status === 'running')
+    const busy = running || (await read($, shells)).some(s => !ENDED.has(shellNow(s, Date.now()).status))
+    const idleBeat = beat % IDLE_BEATS === 0
+    if (!pane.isShown && !busy && !idleBeat) return
+    await Promise.allSettled([pollProject($), Date.now() - lastAll >= 10e3 ? pollAll($) : undefined])
+    if (pane.isShown && !running && (busy || idleBeat)) await update($, tick, n => n + 1)
+  } catch {
+  } finally {
+    polling = false
+  }
+}
+
 export const register: Register = (on, options) => {
   t = STRINGS[(options.language as Lang) in STRINGS ? (options.language as Lang) : 'en']
   on('session.start', async ($, e, next) => {
@@ -434,16 +524,19 @@ export const register: Register = (on, options) => {
       : (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Linux' ? 'linux' : 'mac'
     await $.command.register({ name: 'agent-radar', description: t.cmdDescription })
     $.clock.every(3000, () => {
-      void syncPane($).catch(() => {})
-      if (polling) return
-      polling = true
-      // Nothing to draw while the pane is closed in this chat: no journals are read until it opens again.
-      void paneUp($).then(async up => {
-        if (up) await Promise.allSettled([pollProject($), Date.now() - lastAll >= 10e3 ? pollAll($) : undefined])
-      }).catch(() => {}).finally(() => (polling = false))
+      // Another chat's open or close arrives within SYNC_BEATS: every chat asking the store each beat kept it hot.
+      if (beat++ % SYNC_BEATS === 0) void syncPane($).catch(() => {})
+      void poll($)
     })
-    $.clock.every(1000, () => void read($, agents).then(l => { if (l.some(a => a.status === "running")) return update($, tick, n => n + 1) }).catch(() => {}))
+    $.clock.every(1000, () => { if (placed) void read($, agents).then(l => { if (l.some(a => a.status === "running")) return update($, tick, n => n + 1) }).catch(() => {}) })
     return next(e)
+  })
+
+  // A client back on the session sees the rows at once, not after the next beat.
+  on('session.attach', async ($, e, next) => {
+    const r = await next(e)
+    void poll($)
+    return r
   })
 
   on('command.run', { command: 'agent-radar' }, async $ => {
