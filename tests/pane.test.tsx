@@ -314,6 +314,8 @@ function session(on: On) {
     modes: () => world.runs.map(r => r[0]!.split(':')[0]!),
     inputs: [] as string[],
     flags: [] as string[],
+    surfaces: ['desktop'] as string[],
+    line: undefined as string | undefined,
     uname: 'Darwin',
   }
   const entry = (p: string) => ({ name: p.split('/').pop()!, kind: 'file', size: world.disk[p]![0], mtimeMs: world.disk[p]![1], isLink: false })
@@ -324,7 +326,8 @@ function session(on: On) {
   on('command.register', () => ({ value: { command: 'agent-radar' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: [world.pane] }))
-  on('ui.status', () => { world.statuses++; return { value: undefined } as never })
+  on('ui.status', (_, e) => { world.statuses++; world.line = (e as { text?: string }).text; return { value: undefined } as never })
+  on('session.surfaces', () => ({ value: world.surfaces }) as never)
   on('agent.list', () => ({ value: [] }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/h' : undefined }) as never)
   on('fs.read', () => ({ value: '{"version":"1"}' }) as never)
@@ -417,10 +420,11 @@ test('an unfinished rollout outside the day folders is read as it grows, and onl
   expect(w.runs.at(-1)).toEqual(['only', '5', old])
 })
 
-test('a pane no surface draws reads nothing, and one behind a tab looks every fifth beat while nothing goes on', async ($, on) => {
+test('a session nothing shows reads nothing, and one behind a tab looks every fifth beat while nothing goes on', async ($, on) => {
   const clock = mock.clock(on, { now: start })
   const w = session(on)
   w.pane = { ...w.pane, isPlaced: false, isShown: false }
+  w.surfaces = []
   await $.session.start(START)
   await clock.advance(120000)
   expect(w.runs).toHaveLength(0)
@@ -428,12 +432,25 @@ test('a pane no surface draws reads nothing, and one behind a tab looks every fi
   // Placed behind another pane: the disk is looked at every fifth beat.
   w.pane = { ...w.pane, isPlaced: true }
   await clock.advance(33000)
+  expect(w.lists).toBeGreaterThan(0)
   expect(w.lists).toBeLessThanOrEqual(4)
   // Back on show: every beat.
   w.pane = { ...w.pane, isShown: true }
   const before = w.lists
   await clock.advance(15000)
   expect(w.lists - before).toBeGreaterThanOrEqual(5)
+})
+
+test('a terminal too narrow for the pane keeps its status line up to date', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  w.pane = { ...w.pane, isPlaced: false, isShown: false }
+  w.surfaces = ['terminal']
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true })
+  await clock.advance(3000)
+  expect(w.line).toBeDefined()
 })
 
 test('with nothing changed nothing is written, the status is not sent again, and an idle pane moves its clocks every fifth beat', async ($, on) => {

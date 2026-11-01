@@ -105,7 +105,7 @@ const REFRESH_BEATS = 20
 // The store's `open` is asked every 12 s, and a session with nothing going on and its pane behind a tab polls every 15 s.
 const SYNC_BEATS = 4
 const IDLE_BEATS = 5
-// Whether a surface draws the pane: nobody is looking while it does not, so neither timer does any work.
+// Whether a surface draws the pane: while none does, the 1 s timer has no clock to move.
 let placed = false
 // This session's share of the machine: what `ownScan` took from the shared scan and the rollouts it read itself.
 let lastProj: Scan | undefined
@@ -565,17 +565,18 @@ async function syncPane($: $) {
   if (!want && up) await $.ui.close({ id: PANE })
 }
 
-// Nothing is read while no surface draws the pane: closed in this chat, on a terminal too narrow for it, or a Desktop
-// session no window shows (the app detaches from those). Behind another tab with nothing going on it looks every
-// fifth beat. A shown pane's clocks move with no write to draw them, so `tick` does: every second while an agent runs
-// (the 1 s timer), every beat for a background command, every fifth beat for the minutes of an idle list.
+// Nothing is read while nothing shows it: closed in this chat, or a Desktop session no window shows (the app detaches
+// from those). A terminal too narrow for the pane still shows the status line, so it goes like a pane behind another
+// tab: with nothing going on it looks every fifth beat. A shown pane's clocks move with no write to draw them, so
+// `tick` does: every second while an agent runs (the 1 s timer), every beat for a background command, every fifth beat
+// for the minutes of an idle list.
 async function poll($: $) {
   if (polling) return
   polling = true
   try {
     const pane = (await $.ui.panes()).find(p => p.id === PANE)
     placed = !!pane?.isPlaced
-    if (!pane?.isPlaced) return
+    if (!pane || (!pane.isPlaced && !(await $.session.surfaces()).length)) return
     const rows = await read($, agents)
     const running = rows.some(a => a.status === 'running')
     const busy = running || (await read($, shells)).some(s => !ENDED.has(shellNow(s, Date.now()).status))
