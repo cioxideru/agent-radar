@@ -1,6 +1,6 @@
 """Self-check of scan.py on fictional journals in a temporary home: quiet parents are read for their active children
 (a session for its subagent, an agent for a nested one, a Codex thread for its child), a chat Remote Control holds
-open stays listed while alive, the cache on stdin spares unchanged journals, and a user line quoting an assistant line is still a turn. Run: python3 -I tests/scan_test.py"""
+open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, and every live session's Desktop title comes with the scan of all. Run: python3 -I tests/scan_test.py"""
 import json, os, subprocess, sys, tempfile, time, datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -87,4 +87,20 @@ with tempfile.TemporaryDirectory() as home:
     again = {r['path'].split('/')[-1]: r for r in scan(home, 'all', '15', stdin=json.dumps(out))['claude']}
     assert again['S1.jsonl']['title'] == 'CACHED', again['S1.jsonl']
     assert again['agent-a2.jsonl']['requests'] == 1 and 'title' not in again['agent-a2.jsonl'], again['agent-a2.jsonl']
+
+    # 'only': the rollouts named, the threads above them, no journals and no Desktop records.
+    one = scan(home, 'only', '5', C + 'rollout-2026-10-16T10-05-00-T2.jsonl')
+    assert {r['id'] for r in one['codex']} == {'T1', 'T2'} and one['claude'] == [], one
+    assert one['dirs'] == [home + '/.codex/sessions/' + d for d in sorted({day, (datetime.date.today() - datetime.timedelta(days=1)).strftime('%Y/%m/%d')})], one['dirs']
+
+    # A live session's Desktop title and the folder its record lies in, whether or not its journal is listed.
+    A = home + ('/Library/Application Support' if sys.platform == 'darwin' else '/.config') + '/Claude/claude-code-sessions/a/b/'
+    os.makedirs(A)
+    json.dump({'sessionId': 'local_1', 'cliSessionId': 'S2', 'title': 'Quiet chat', 'cwd': '/x/Proj'}, open(A + 'local_1.json', 'w'))
+    json.dump({'sessionId': 'local_2', 'cliSessionId': 'S9', 'title': 'Not running', 'cwd': '/x/Proj'}, open(A + 'local_2.json', 'w'))
+    json.dump({'sessionId': 'S2', 'pid': os.getpid()}, open(home + '/.claude/sessions/4.json', 'w'))
+    both = scan(home, 'all', '15')
+    assert both['titles'] == {'S2': 'Quiet chat'}, both['titles']
+    assert both['watch'] == [A[:-1]], both['watch']
+    assert 'S2.jsonl' not in {r['path'].split('/')[-1] for r in both['claude']}
     print('scan.py: ok')

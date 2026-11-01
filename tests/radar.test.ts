@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, sparkline, stackBar } from '../hooks/charts'
 
 import type { Agent, Shell } from '../types'
-import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, ordered, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, trimShells } from '../hooks/register'
+import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, ordered, ownScan, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, trimShells } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -166,6 +166,50 @@ test("this session's poll: a child thread under the run launched here, a child s
   expect(out[out.length - 1]!.id).toBe('/p/kid.jsonl')
   // The same scan again adds nothing twice.
   expect(mergeProject(out, s, [kid], new Map(), {}, now).map(a => a.id)).toEqual(out.map(a => a.id))
+})
+
+test("this session's share of the machine-wide scan is what its own scan read", () => {
+  const now = Date.parse('2026-10-16T12:00:00Z')
+  const rec = (path: string, min: number, more = {}) => ({ path, mtime: now - min * 60e3, tokIn: 1, tokOut: 1, ...more })
+  const desktop = (parent: string) => ({ id: 'local_x', kind: 'code' as const, parent })
+  const all = {
+    dirs: ['/c/day'], watch: ['/d'], titles: { S1: 'Mine', S2: 'Theirs' },
+    claude: [
+      rec('/p/kid.jsonl', 1, { desktop: desktop('S1') }),
+      rec('/p/kid/subagents/agent-a.jsonl', 1, { desktop: desktop('S1') }),
+      rec('/p/theirs.jsonl', 1, { desktop: desktop('S2') }),
+      rec('/p/quiet.jsonl', 1),
+    ],
+    codex: [
+      rec('/c/recent.jsonl', 2),
+      rec('/c/past-window.jsonl', 9),
+      rec('/c/open.jsonl', 9),
+      rec('/c/above.jsonl', 9, { id: 'T1' }),
+      rec('/c/child.jsonl', 2, { id: 'T2', parent: 'T1' }),
+      rec('/c/by-kid.jsonl', 2, { launch: { path: '/p/kid.jsonl', cmd: 'codex exec a', bg: false } }),
+      rec('/c/by-stranger.jsonl', 2, { launch: { path: '/p/theirs.jsonl', cmd: 'codex exec b', bg: false } }),
+      rec('/c/read-here.jsonl', 2, { tokOut: 1, launch: { path: '/p/kid.jsonl', cmd: 'codex exec c', bg: true } }),
+      rec('/c/stale-here.jsonl', 1, { tokOut: 2 }),
+    ],
+  }
+  const own = new Map([
+    ['/c/read-here.jsonl', rec('/c/read-here.jsonl', 0, { tokOut: 9 })],
+    ['/c/stale-here.jsonl', rec('/c/stale-here.jsonl', 2, { tokOut: 9 })],
+    ['/c/only-here.jsonl', rec('/c/only-here.jsonl', 0)],
+  ])
+  const v = ownScan(all, 'S1', own, ['/c/open.jsonl'], now)
+  const by = (p: string) => v.codex.find(r => r.path === p)
+  expect(v.claude.map(r => r.path)).toEqual(['/p/kid.jsonl'])
+  expect(v.title).toBe('Mine')
+  expect([v.dirs, v.watch]).toEqual([['/c/day'], ['/d']])
+  expect(by('/c/past-window.jsonl')).toBeUndefined()
+  for (const p of ['/c/recent.jsonl', '/c/open.jsonl', '/c/above.jsonl', '/c/child.jsonl', '/c/only-here.jsonl']) expect(by(p)).toBeDefined()
+  expect(by('/c/by-kid.jsonl')!.launch!.cmd).toBe('codex exec a')
+  expect(by('/c/by-stranger.jsonl')!.launch).toBeUndefined()
+  // The newer of the two reads, and a launch only the shared scan can know stays with a rollout read here.
+  expect(by('/c/read-here.jsonl')!.tokOut).toBe(9)
+  expect(by('/c/read-here.jsonl')!.launch!.cmd).toBe('codex exec c')
+  expect(by('/c/stale-here.jsonl')!.tokOut).toBe(2)
 })
 
 test('past the budget the oldest ended commands go first; running ones stay', () => {

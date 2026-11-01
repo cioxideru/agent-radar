@@ -192,10 +192,9 @@ def alive(pid):
         return False
     return True
 
-def remote():
+def remote(recs):
     # The chats claude remote-control holds open: their journals go quiet between turns, so only the process records
     # say they are alive. Desktop chats with Remote Control on carry a hostSessionId.
-    recs = [side(p) or {} for p in files(H + '/.claude/sessions/*.json')]
     return {d['sessionId'] for d in recs if d.get('sessionId') and d.get('bridgeSessionId') and not d.get('hostSessionId') and alive(d.get('pid'))}
 
 # Background tasks this journal was told have ended, by the tool call that started them, and the background shell
@@ -232,12 +231,11 @@ def desktop(only=None):
     # record and the records of the sessions it started are read, which keeps the 3 s poll light.
     A = {'darwin': H + '/Library/Application Support', 'win32': os.environ.get('APPDATA', '').replace(os.sep, '/')}.get(sys.platform, H + '/.config') + '/Claude/'
     texts = [(p, open(p, errors='replace').read()) for p in files(A + 'claude-code-sessions/*/*/local_*.json') + files(A + 'local-agent-mode-sessions/**/local_*.json', recursive=True)]
+    # The mod looks at these between scans: Desktop replaces a record to change it, so the folder's time tells of any.
+    out['watch'] = sorted({os.path.dirname(p) for p, s in texts})
     if only is not None:
         ids = {only} | {load(s).get('sessionId') for p, s in texts if only in s}
-        folders = {os.path.dirname(p) for p, s in texts}
         texts = [(p, s) for p, s in texts if any(i and i in s for i in ids)]
-        # What the mod looks at before starting this scan again: a folder's time moves when a record comes or goes.
-        out['watch'] = sorted(folders) + [p for p, s in texts]
     recs, cli = [], {}
     for p, s in texts:
         d = load(s)
@@ -272,7 +270,8 @@ def parents(paths, desk):
 
 days = {(datetime.date.today() - datetime.timedelta(days=i)).strftime('%Y/%m/%d') for i in (0, 1)}
 out = {'codex': [], 'claude': [], 'dirs': [H + '/.codex/sessions/' + d for d in sorted(days)]}
-cx = [p for d in days for p in files(H + '/.codex/sessions/' + d + '/rollout-*.jsonl')] + extra
+# 'only' reads the rollouts it is given and nothing else: a session's own, between shared scans.
+cx = ([] if mode == 'only' else [p for d in days for p in files(H + '/.codex/sessions/' + d + '/rollout-*.jsonl')]) + extra
 for p, st in recent(set(cx)).items():
     out['codex'].append(parse(p, st, codex))
 # A child thread's parent rollout, read even when quiet; the rollout's name ends in its thread id.
@@ -296,7 +295,10 @@ for r in out['codex']:
         r['title'] = names[r['id']]
 if mode == 'all':
     desk = desktop()
-    held = remote()
+    procs = [side(p) or {} for p in files(H + '/.claude/sessions/*.json')]
+    held = remote(procs)
+    # Every session's Desktop title, so a quiet one that is not listed below still reads its own here.
+    out['titles'] = {d['sessionId']: desk[d['sessionId']]['title'] for d in procs if (desk.get(d.get('sessionId')) or {}).get('title')}
     cl = recent(files(H + '/.claude/projects/*/*.jsonl') + files(H + '/.claude/projects/*/*/subagents/agent-*.jsonl'))
     cl.update(stats(q for sid in held for q in files(H + '/.claude/projects/*/' + sid + '.jsonl')))
     add = parents(cl, desk)

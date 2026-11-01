@@ -7,8 +7,13 @@ import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
 type $ = EngineInterface
-// dirs: the folders a new rollout lands in; watch: the Desktop folder and records this session's own scan reads.
-type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[] }
+// dirs: the folders a new rollout lands in; watch: the folders of Desktop's records; titles: Desktop's title of each
+// live session, by its id.
+type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string> }
+// The machine-wide scan both tabs draw from, as it lies in the shared store. `v` tells this shape: a chat still on an
+// older mod writes none, a newer one another number, and each scans for itself rather than read the other's.
+type Shared = { v: number; at: number; mins: number; s: Scan }
+const SCHEMA = 1
 type Rec = {
   path: string; mtime: number; size?: number; tokIn: number; tokOut: number; cwd?: string; t0?: string
   model?: string; effort?: string; title?: string
@@ -83,22 +88,31 @@ let claudeWindow = 0
 // auto-compaction or CLAUDE_CODE_AUTO_COMPACT_WINDOW sets it; read from the context breakdown at most once a minute.
 let compactWindow = 0
 let compactAt = 0
-// One poll at a time; the all-sessions scan re-reads every active journal, so it runs at most every 10 s.
+// One poll at a time, and one shared scan at a time: a press on the scope while the clock's scan runs joins it.
 let polling = false
-let lastAll = 0
-let allRun: Promise<void> | undefined
-// The 3 s clock's beats, and the beat of the last own scan: a quiet session rescans once a minute.
+let sharing: Promise<Shared | undefined> | undefined
+// The last shared scan this chat saw, and since when it owes a newer one.
+let shared: Shared | undefined
+let owedSince = 0
+// How old the shared scan may be: 5 s while anything moves and the All tab or a change here asks for it, 10 s for an
+// All tab with nothing moving, a minute for a quiet session's title and children. Another chat's mark holds for 5 s.
+const AGE = { moving: 5e3, still: 10e3, quiet: 60e3, mark: 5e3 }
+// The 3 s clock's beats; a session with its Finished rows on looks up the sessions it started once a minute.
 let beat = 0
-let scanBeat = 0
+let kinBeat = -Infinity
 const REFRESH_BEATS = 20
 // The store's `open` is asked every 12 s, and a session with nothing going on and its pane behind a tab polls every 15 s.
 const SYNC_BEATS = 4
 const IDLE_BEATS = 5
 // Whether a surface draws the pane: nobody is looking while it does not, so neither timer does any work.
 let placed = false
-// The last scan of this session's own: its rows seed the next, so a journal unchanged since is not read again.
+// This session's share of the machine: what `ownScan` took from the shared scan and the rollouts it read itself.
 let lastProj: Scan | undefined
-// What that scan's files looked like: path → size and time, from the listing taken before it ran.
+// The rollouts it read itself: its own unfinished ones and any new one, read the beat they change.
+let own = new Map<string, Rec>()
+// The sessions it started that went quiet past the shared window, while its Finished rows are on.
+let kin: Rec[] = []
+// What its files looked like at the last look: path → size and time.
 let seen = new Map<string, string>()
 // The status line last sent; '' so the first poll of a load clears what the one before left.
 let lastStatus: string | undefined = ''
@@ -183,6 +197,7 @@ const inRoot = (cwd = '') => cwd === root || cwd.startsWith(root + '/') || cwd.s
 const codexStatus = (r: Rec, now: number) =>
   (r.started ?? 0) > 0 && (r.done ?? 0) >= (r.started ?? 0) ? 'completed' : now - r.mtime < 60e3 ? 'running' : 'idle'
 
+const isRollout = (p: string) => p.includes('/.codex/sessions/')
 // A rollout this session's list has no use for: another project's, nobody here launched it, and no thread above it
 // is ours. Its writes are no reason to start Python. One whose first line is not there yet has no folder and counts.
 function foreign(s: Scan, rows: Agent[]) {
@@ -196,9 +211,9 @@ function foreign(s: Scan, rows: Agent[]) {
 }
 
 // The files this session's list hangs on that changed since the last look, told by the file system for a fraction of
-// a Python start: the rollouts of today and yesterday active within the scan's window, the Desktop folder and records,
-// the journals of the sessions this one started, and the open rollouts wherever they lie (`extra`). A folder of Desktop
-// records takes 6 ms to list, so it is watched by its own time and only this session's records are looked at.
+// a Python start: the rollouts of today and yesterday active within the window, the Desktop folder, the journals of
+// the sessions this one started, and the open rollouts wherever they lie (`extra`). A folder of Desktop records takes
+// 6 ms to list, so it is looked at by its own time alone, which any record written moves.
 async function changed($: $, s: Scan, rows: Agent[], extra: string[], now: number) {
   const open = new Set(extra)
   const cur = new Map<string, string>()
@@ -211,7 +226,8 @@ async function changed($: $, s: Scan, rows: Agent[], extra: string[], now: numbe
     if (e) cur.set(p, `${e.size}:${e.mtimeMs}`)
   }
   const skip = foreign(s, rows)
-  const out = [...cur].filter(([p, v]) => seen.get(p) !== v && !skip.has(p)).map(([p]) => p)
+  // A rollout new to this look has yet to be read; any other file was read by the scan that named it.
+  const out = [...cur].filter(([p, v]) => (seen.has(p) ? seen.get(p) !== v : isRollout(p)) && !skip.has(p)).map(([p]) => p)
   seen = cur
   return out
 }
@@ -225,23 +241,34 @@ async function pollProject($: $) {
   // After a resume or /clear the process goes on under another id: the session's own row follows it.
   const moved = me !== sessionId
   if (moved) await upsert($, 'main', { sid: (sessionId = me), journal: journalOf(root, me) })
-  // Python only when a file it would read has changed, and once a minute for what no file here tells: a new day, a
-  // rollout leaving the window, a thread's name. Statuses that age with the clock are worked out from the last scan.
+  // No Python of its own for a quiet session: what it needs comes from the shared scan, kept fresher until it has
+  // seen a change in a child session or the Desktop folder. A rollout that changed is read here the same beat, on its
+  // own; what has not changed stays as last read, and statuses that age with the clock are worked out from it below.
   const diff = lastProj ? await changed($, lastProj, list, extra, now) : []
-  if (!lastProj || moved || diff.length || beat - scanBeat >= REFRESH_BEATS) {
-    scanBeat = beat
-    lastProj = await scan($, 'codex:' + me, PROJ_MIN, extra, lastProj)
-  }
-  const { claude, title } = lastProj!
+  const rollouts = diff.filter(isRollout)
+  if (diff.length > rollouts.length) owedSince = await $.clock.now()
+  const rec = await pollAll($, !!owedSince && (shared?.at ?? 0) < owedSince)
+  if (rollouts.length) for (const r of (await scan($, 'only', PROJ_MIN, rollouts, lastProj)).codex) own.set(r.path, r)
+  lastProj = ownScan(rec?.s ?? { codex: [], claude: [] }, me, own, extra, now)
+  own = new Map(lastProj.codex.filter(r => own.has(r.path)).map(r => [r.path, r]))
+  const { claude, title } = lastProj
   if (title && title !== list.find(a => a.id === 'main')?.title) await upsert($, 'main', { title })
   // Once a load: what this session's journal says ended while no hook was listening (a resume, a reload), and the
   // background commands it ran before.
   const past = swept ? undefined : ((await py($, ['ended', '0', journalOf(root, me)])) as Past | undefined)
   swept = true
   if (past) await update($, shells, l => pastShells(l, past))
+  // Finished rows reach further back than the shared window: its own scan, once a minute while they are on.
+  const view = await read($, viewA)
+  if (view.showDone && view.scope === 'proj' && beat - kinBeat >= REFRESH_BEATS) {
+    kinBeat = beat
+    kin = (await scan($, 'codex:' + me, PROJ_MIN, [], { codex: [], claude: kin })).claude
+  }
+  const inScan = new Set(claude.map(r => r.path))
+  const quiet = view.showDone ? kin.filter(r => !inScan.has(r.path)) : []
   // Desktop sessions this one started sit under it, as Claude Desktop draws them.
-  const kids = claude.map(r => ({ ...claudeRow(r, now), parentId: 'main' }))
-  const s = lastProj!
+  const kids = [...claude, ...quiet].map(r => ({ ...claudeRow(r, now), parentId: 'main' }))
+  const s = lastProj
   const merged = (cur: Agent[]) => mergeProject(cur, s, kids, live, past?.done ?? {}, now)
   const cur = await read($, agents)
   if (!same(merged(cur), cur)) await update($, agents, merged)
@@ -261,6 +288,29 @@ async function pollProject($: $) {
   const status = running ? t.statusLine(running, fmtK(tok)) : undefined
   // Each call is a message to the host.
   if (status !== lastStatus) $.ui.status((lastStatus = status))
+}
+
+// This session's share of the machine-wide scan, the same rows its own scan of old read: the sessions it started, its
+// title, the rollouts active within the window or still open (`extra`) with the threads above them, each in the newer
+// of the shared record and its own read (`own`). A launch another session made is no launch here: that session is not
+// listed here, so such a run is drawn as a stranger, as it always was.
+export function ownScan(s: Scan, me: string, own: Map<string, Rec>, extra: string[], now: number): Scan {
+  const claude = s.claude.filter(r => r.desktop?.parent === me && !r.path.includes('/subagents/'))
+  const byPath = new Map(s.codex.map(r => [r.path, r]))
+  for (const r of own.values()) {
+    const was = byPath.get(r.path)
+    if (!was || r.mtime >= was.mtime) byPath.set(r.path, { ...r, launch: r.launch ?? was?.launch })
+  }
+  const all = [...byPath.values()]
+  const byThread = new Map(all.map(r => [r.id, r]))
+  const keep = new Set(all.filter(r => now - r.mtime <= PROJ_MIN * 60e3 || extra.includes(r.path)))
+  for (const r of keep) {
+    const up = r.parent ? byThread.get(r.parent) : undefined
+    if (up) keep.add(up)
+  }
+  const launchers = new Set(claude.map(r => r.path))
+  const codex = [...keep].map(r => (r.launch && !launchers.has(r.launch.path) ? { ...r, launch: undefined } : r))
+  return { codex, claude, title: s.titles?.[me], dirs: s.dirs, watch: s.watch }
 }
 
 // This session's list after a poll: the hooks' rows brought up to date from the live agents (`live`: id → status) and
@@ -403,21 +453,41 @@ export function fromScan(s: Scan, now: number): Agent[] {
   return [...claude, ...codexRows(s.codex, claude, now)]
 }
 
-// One All scan at a time: a press on the scope while the clock's scan runs joins it instead of starting another.
-const pollAll = ($: $) => allRun ?? (allRun = scanAll($).finally(() => { allRun = undefined }))
-async function scanAll($: $) {
+// Every chat draws from one machine-wide scan in the shared store, so its cost does not grow with the chats. No chat
+// leads: whoever finds it older than `age` makes the next, leaving a mark the others honor for a moment. It is best
+// effort (the store has no write-if-unchanged): a race costs a second scan, and a chat gone mid-scan a few seconds.
+async function takeShared($: $, age: number, mins: number) {
+  const now = await $.clock.now()
+  const old = (r?: Shared) => !r || r.mins < mins || Math.abs(now - r.at) >= age
+  if (!old(shared)) return shared
+  const kept = (await $.store.get('allScan').catch(() => undefined)) as Shared | undefined
+  if (kept?.v === SCHEMA) shared = kept
+  if (!old(shared)) return shared
+  const mark = await $.store.get('scanning').catch(() => undefined)
+  if (typeof mark === 'number' && Math.abs(now - mark) < AGE.mark) return shared
+  await $.store.set('scanning', now).catch(() => {})
+  const s = await scan($, 'all', mins, [], shared?.s)
+  // A scan that failed has no folders, and leaves the record as it was.
+  if (!s.dirs) return shared
+  shared = { v: SCHEMA, at: await $.clock.now(), mins, s }
+  await $.store.set('allScan', shared).catch(() => {})
+  return shared
+}
+
+// The shared scan as this chat needs it now, drawn if the All tab shows. A poll tells in `soon` whether something it
+// draws has changed; a press on the All tab's switches says nothing, and elsewhere asks for no scan.
+async function pollAll($: $, soon?: boolean) {
   const view = await read($, viewA)
-  if (view.scope !== 'all') return
-  lastAll = Date.now()
-  const mins = view.showDone ? 120 : ACTIVE_MIN
-  // Every chat shows the same machine-wide list: a scan another chat made in the last few seconds, for the same
-  // window, is reused from the shared store instead of read from disk again; an older one seeds the next scan.
-  const kept = (await $.store.get('allScan').catch(() => undefined)) as { at: number; mins: number; s: Scan } | undefined
-  const fresh = kept && kept.mins === mins && Date.now() - kept.at < 9e3
-  const s = fresh ? kept.s : await scan($, 'all', mins, [], kept?.s)
-  if (!fresh) await $.store.set('allScan', { at: Date.now(), mins, s }).catch(() => {})
-  const rows = fromScan(s, Date.now())
+  const all = view.scope === 'all'
+  if (!all && soon === undefined) return
+  const now = await $.clock.now()
+  const moving = !!shared && [...shared.s.claude, ...shared.s.codex].some(r => now - r.mtime < 60e3)
+  const age = all ? (moving ? AGE.moving : AGE.still) : soon ? AGE.moving : AGE.quiet
+  const rec = await (sharing ?? (sharing = takeShared($, age, all && view.showDone ? 120 : ACTIVE_MIN).finally(() => { sharing = undefined })))
+  if (!all || !rec) return rec
+  const rows = fromScan(rec.s, now)
   if (!same(rows, await read($, others))) await update($, others, () => rows)
+  return rec
 }
 
 // Depth-first order with each child under its parent; a row whose parent is not shown becomes a root.
@@ -501,7 +571,7 @@ async function poll($: $) {
     const busy = running || (await read($, shells)).some(s => !ENDED.has(shellNow(s, Date.now()).status))
     const idleBeat = beat % IDLE_BEATS === 0
     if (!pane.isShown && !busy && !idleBeat) return
-    await Promise.allSettled([pollProject($), Date.now() - lastAll >= 10e3 ? pollAll($) : undefined])
+    await pollProject($).catch(() => {})
     if (pane.isShown && !running && (busy || idleBeat)) await update($, tick, n => n + 1)
   } catch {
   } finally {
@@ -523,10 +593,15 @@ export const register: Register = (on, options) => {
     os = (await $.env.get('OS')) === 'Windows_NT' ? 'win'
       : (await $.process.run(['uname', '-s']).catch(() => undefined))?.stdout.trim() === 'Linux' ? 'linux' : 'mac'
     await $.command.register({ name: 'agent-radar', description: t.cmdDescription })
-    $.clock.every(3000, () => {
+    const onBeat = () => {
       // Another chat's open or close arrives within SYNC_BEATS: every chat asking the store each beat kept it hot.
       if (beat++ % SYNC_BEATS === 0) void syncPane($).catch(() => {})
       void poll($)
+    }
+    // Each chat has its own place in the 3 s, so chats reloaded together do not all find the shared scan stale at once.
+    $.clock.after(1 + [...sessionId].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 2999, 0), () => {
+      onBeat()
+      $.clock.every(3000, onBeat)
     })
     $.clock.every(1000, () => { if (placed) void read($, agents).then(l => { if (l.some(a => a.status === "running")) return update($, tick, n => n + 1) }).catch(() => {}) })
     return next(e)

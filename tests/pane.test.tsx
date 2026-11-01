@@ -141,7 +141,8 @@ test('the All scope reuses a fresh scan another chat left in the store', async (
   let runs = 0
   on('process.run', () => { runs++; return { value: { exitCode: 1, stdout: '', stderr: '' } } as never })
   const now = Date.now()
-  mock.store(on, { allScan: { at: now, mins: 15, s: { codex: [], claude: [
+  mock.clock(on, { now })
+  mock.store(on, { allScan: { v: 1, at: now, mins: 15, s: { codex: [], claude: [
     { path: '/p/s9.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Shared scan row' },
   ] } } })
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
@@ -157,7 +158,8 @@ test("this chat's own session title stands out on a tint", async ($, on) => {
   on('state.set', { plugin: 'agent-radar', key: 'agents' } as never, (($: unknown, e: { value: unknown[] }, next: (e: unknown) => unknown) =>
     next({ ...e, value: [main, ...e.value.filter(a => (a as { id: string }).id !== 'main')] })) as never)
   // A fresh All scan holding this session's journal and another chat's.
-  mock.store(on, { allScan: { at: Date.now(), mins: 15, s: { codex: [], claude: [
+  mock.clock(on, { now: Date.now() })
+  mock.store(on, { allScan: { v: 1, at: Date.now(), mins: 15, s: { codex: [], claude: [
     { path: '/p/S1.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date().toISOString(), title: 'Own journal row' },
     { path: '/p/S2.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date().toISOString(), title: 'Other chat row' },
   ] } } })
@@ -253,7 +255,8 @@ test('a chat Remote Control holds open stays listed under its own mark, past the
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
   const now = Date.now()
   const quiet = { tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 864e5).toISOString(), mtime: now - 3600e3 }
-  mock.store(on, { allScan: { at: now, mins: 15, s: { codex: [], claude: [
+  mock.clock(on, { now })
+  mock.store(on, { allScan: { v: 1, at: now, mins: 15, s: { codex: [], claude: [
     { ...quiet, path: '/p/R.jsonl', title: 'Held chat', entry: 'remote-control', live: true },
     { ...quiet, path: '/p/E.jsonl', title: 'Ended chat', entry: 'remote-control' },
     ...Array.from({ length: 50 }, (_, i) => ({ path: `/p/n${i}.jsonl`, mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Newer ' + i })),
@@ -274,7 +277,8 @@ test('a chat Remote Control holds open stays listed under its own mark, past the
 test('among all sessions a quiet session still heads its running subagent, so the subagent is never a root', async ($, on) => {
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
   const now = Date.now()
-  mock.store(on, { allScan: { at: now, mins: 15, s: { codex: [], claude: [
+  mock.clock(on, { now })
+  mock.store(on, { allScan: { v: 1, at: now, mins: 15, s: { codex: [], claude: [
     { path: '/p/Q.jsonl', mtime: now - 40 * 60e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 3600e3).toISOString(), title: 'Quiet lead' },
     { path: '/p/Q/subagents/agent-b1.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), meta: { description: 'Busy helper' } },
   ] } } })
@@ -291,10 +295,11 @@ test('among all sessions a quiet session still heads its running subagent, so th
   }
 })
 
-// A session under a test clock: the folders in `disk` (path → size and time, a folder's files by their full path),
-// the pane as `pane` says, and every Python start in `runs`. The scanner's answer is what `scan` holds.
+// A session under a test clock: the folders in `disk` (a file's full path → size and time), the pane as `pane` says, the
+// shared store, and every Python start in `runs`. The scanner answers with `scan`.
 const DAY = '/h/.codex/sessions/2026/11/01'
 const SID = 'S1'
+const start = 1793500000000
 function session(on: On) {
   const world = {
     disk: {} as Record<string, [number, number]>,
@@ -302,7 +307,11 @@ function session(on: On) {
     runs: [] as string[][],
     lists: 0,
     statuses: 0,
-    scan: { codex: [], claude: [], dirs: [DAY] } as Record<string, unknown>,
+    store: {} as Record<string, unknown>,
+    gets: {} as Record<string, number>,
+    scan: { codex: [], claude: [], dirs: [DAY], watch: [] } as Record<string, unknown>,
+    kin: [] as unknown[],
+    modes: () => world.runs.map(r => r[0]!.split(':')[0]!),
   }
   const entry = (p: string) => ({ name: p.split('/').pop()!, kind: 'file', size: world.disk[p]![0], mtimeMs: world.disk[p]![1], isLink: false })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -316,6 +325,8 @@ function session(on: On) {
   on('agent.list', () => ({ value: [] }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/h' : undefined }) as never)
   on('fs.read', () => ({ value: '{"version":"1"}' }) as never)
+  on('store.get', (_, e) => { world.gets[e.key] = (world.gets[e.key] ?? 0) + 1; return { value: world.store[e.key] } })
+  on('store.set', (_, e) => { world.store[e.key] = e.value; return { value: undefined } as never })
   on('fs.list', (_, e) => {
     const dir = (e as { path: string }).path
     world.lists++
@@ -331,38 +342,40 @@ function session(on: On) {
     const argv = (e as { argv: string[] }).argv
     if (argv[0] === 'uname') return { value: { exitCode: 0, stdout: 'Darwin', stderr: '' } } as never
     world.runs.push(argv.slice(4))
-    return { value: { exitCode: 0, stdout: JSON.stringify(argv[4] === 'ended' ? { done: {}, at: {}, bg: [] } : world.scan), stderr: '' } } as never
+    const answer = argv[4] === 'ended' ? { done: {}, at: {}, bg: [] } : argv[4]!.startsWith('codex:') ? { codex: [], claude: world.kin } : world.scan
+    return { value: { exitCode: 0, stdout: JSON.stringify(answer), stderr: '' } } as never
   })
   return world
 }
 const START = { cwd: '/x/Proj', surface: 'desktop', isInteractive: true } as never
 
-test('a quiet session starts Python once a minute, and a changed file within one beat', async ($, on) => {
-  const clock = mock.clock(on, { now: 1000 })
-  mock.store(on)
+test('a quiet session starts Python for the shared scan once a minute, and for a new rollout within one beat', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
   const w = session(on)
   await $.session.start(START)
-  // Load: the scan and one look back through the journal.
+  // Load: the shared scan and one look back through the journal.
   await clock.advance(6000)
-  const scans = () => w.runs.filter(r => r[0] !== 'ended').length
-  expect(scans()).toBe(1)
-  expect(w.runs).toHaveLength(2)
+  expect(w.modes()).toEqual(['all', 'ended'])
+  expect((w.store.allScan as { v: number }).v).toBe(1)
   await clock.advance(30000)
-  expect(scans()).toBe(1)
-  // A new rollout is seen at the next beat.
-  w.disk[DAY + '/rollout-a.jsonl'] = [10, Date.now()]
+  expect(w.runs).toHaveLength(2)
+  // A new rollout is read on its own at the next beat.
+  const fresh = DAY + '/rollout-a.jsonl'
+  w.disk[fresh] = [10, Date.now()]
   await clock.advance(3000)
-  expect(scans()).toBe(2)
-  await clock.advance(21000)
-  expect(scans()).toBe(2)
-  // The minute since the last scan: what no file tells, a new day or a rollout leaving the window.
-  await clock.advance(39000)
-  expect(scans()).toBe(3)
+  expect(w.runs.at(-1)).toEqual(['only', '5', fresh])
+  // The minute since the last shared scan: a title, a new child, a rollout leaving the window.
+  await clock.advance(24000)
+  expect(w.modes().filter(m => m === 'all')).toHaveLength(2)
+  await clock.advance(57000)
+  expect(w.modes().filter(m => m === 'all')).toHaveLength(2)
+  await clock.advance(3000)
+  expect(w.modes().filter(m => m === 'all')).toHaveLength(3)
+  expect(w.modes().filter(m => m === 'only')).toHaveLength(1)
 })
 
 test("another project's rollout is no reason to start Python; this project's is", async ($, on) => {
-  const clock = mock.clock(on, { now: 1000 })
-  mock.store(on)
+  const clock = mock.clock(on, { now: start })
   const w = session(on)
   const rec = (name: string, cwd: string) => ({ path: `${DAY}/${name}`, id: name, cwd, mtime: Date.now(), tokIn: 1, tokOut: 1, model: 'gpt-6' })
   w.scan.codex = [rec('other.jsonl', '/x/Other'), rec('here.jsonl', '/x/Proj/sub')]
@@ -376,12 +389,11 @@ test("another project's rollout is no reason to start Python; this project's is"
   expect(w.runs.length).toBe(before)
   w.disk[`${DAY}/here.jsonl`] = [2, Date.now()]
   await clock.advance(3000)
-  expect(w.runs.length).toBe(before + 1)
+  expect(w.runs.at(-1)).toEqual(['only', '5', `${DAY}/here.jsonl`])
 })
 
-test('an unfinished rollout outside the day folders is read as it grows', async ($, on) => {
-  const clock = mock.clock(on, { now: 1000 })
-  mock.store(on)
+test('an unfinished rollout outside the day folders is read as it grows, and only then', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
   const w = session(on)
   const old = '/h/.codex/sessions/2026/10/20/rollout-old.jsonl'
   w.disk[old] = [1, Date.now() - 3600e3]
@@ -389,20 +401,17 @@ test('an unfinished rollout outside the day folders is read as it grows', async 
   await $.session.start(START)
   await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6 "Review the diff please"', description: 'Diff review', run_in_background: true })
   w.scan.codex = [{ path: old, id: 'T1', cwd: '/x/Proj', mtime: Date.now(), tokIn: 1, tokOut: 1, model: 'gpt-6', originator: 'codex_exec', t0: new Date().toISOString() }]
-  await clock.advance(9000)
+  await clock.advance(70000)
   const before = w.runs.length
   await clock.advance(9000)
   expect(w.runs.length).toBe(before)
   w.disk[old] = [2, Date.now()]
   await clock.advance(3000)
-  expect(w.runs.length).toBe(before + 1)
-  // The extra rollout went in to the scan that read it.
-  expect(w.runs.at(-1)!.includes(old)).toBe(true)
+  expect(w.runs.at(-1)).toEqual(['only', '5', old])
 })
 
 test('a pane no surface draws reads nothing, and one behind a tab looks every fifth beat while nothing goes on', async ($, on) => {
-  const clock = mock.clock(on, { now: 1000 })
-  mock.store(on)
+  const clock = mock.clock(on, { now: start })
   const w = session(on)
   w.pane = { ...w.pane, isPlaced: false, isShown: false }
   await $.session.start(START)
@@ -411,8 +420,8 @@ test('a pane no surface draws reads nothing, and one behind a tab looks every fi
   expect(w.lists).toBe(0)
   // Placed behind another pane: the disk is looked at every fifth beat.
   w.pane = { ...w.pane, isPlaced: true }
-  await clock.advance(30000)
-  expect(w.lists).toBeLessThanOrEqual(2)
+  await clock.advance(33000)
+  expect(w.lists).toBeLessThanOrEqual(4)
   // Back on show: every beat.
   w.pane = { ...w.pane, isShown: true }
   const before = w.lists
@@ -420,9 +429,8 @@ test('a pane no surface draws reads nothing, and one behind a tab looks every fi
   expect(w.lists - before).toBeGreaterThanOrEqual(5)
 })
 
-test('with nothing changed nothing is written, the status is not sent again, and a shown pane still moves its clocks', async ($, on) => {
-  const clock = mock.clock(on, { now: 1000 })
-  mock.store(on)
+test('with nothing changed nothing is written, the status is not sent again, and an idle pane moves its clocks every fifth beat', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
   const w = session(on)
   const writes: Record<string, number> = {}
   on('state.set', (($: unknown, e: { key: string }, next: (e: unknown) => unknown) => { writes[e.key] = (writes[e.key] ?? 0) + 1; return next(e) }) as never)
@@ -432,23 +440,144 @@ test('with nothing changed nothing is written, the status is not sent again, and
   await clock.advance(30000)
   expect(writes.agents ?? 0).toBe(agentsBefore)
   expect(w.statuses).toBe(statusBefore)
-  // An idle list's minutes: every fifth beat, the one write there is.
   expect((writes.tick ?? 0) - tickBefore).toBe(2)
 })
 
 test('closing the pane in another chat arrives within twelve seconds, and the store is asked no oftener', async ($, on) => {
-  const clock = mock.clock(on, { now: 1000 })
+  const clock = mock.clock(on, { now: start })
   const w = session(on)
-  let open: unknown = true, gets = 0, closes = 0
-  on('store.get', () => { gets++; return { value: open } })
-  on('store.set', () => ({ value: undefined }) as never)
+  let closes = 0
+  w.store.open = true
   on('ui.close', () => { closes++; return { value: undefined } as never })
   await $.session.start(START)
   await clock.advance(36000)
-  gets = 0
+  w.gets.open = 0
   await clock.advance(36000)
-  expect(gets).toBe(3)
-  open = false
+  expect(w.gets.open).toBe(3)
+  w.store.open = false
   await clock.advance(12000)
   expect(closes).toBe(1)
+})
+
+test("a chat reads another's fresh scan instead of making its own, and a stale one starts a scan the next chat honors", async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  w.store.allScan = { v: 1, at: start + 2000, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
+  await $.session.start(START)
+  await clock.advance(3000)
+  expect(w.modes()).toEqual(['ended'])
+  // Past the minute, with another chat's mark just left: this one waits for it.
+  await clock.advance(57000)
+  w.store.scanning = clock.now()
+  await clock.advance(3000)
+  expect(w.modes()).toEqual(['ended'])
+  // That chat went away with its scan unmade: the mark runs out and the next look scans.
+  await clock.advance(3000)
+  expect(w.modes()).toEqual(['ended', 'all'])
+  expect((w.store.allScan as { at: number }).at).toBeGreaterThan(start + 60000)
+})
+
+test("a record of another version is left alone: its rows are not drawn and this chat's scan replaces it", async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  const old = { at: start, mins: 15, s: { codex: [], claude: [{ path: '/p/Z.jsonl', mtime: start, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(start).toISOString(), title: 'Old record row' }] } }
+  w.store.allScan = old
+  await $.session.start(START)
+  await clock.advance(3000)
+  expect(w.modes()).toEqual(['all', 'ended'])
+  expect((w.store.allScan as { v: number }).v).toBe(1)
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  await ui.press({ key: 's-all' })
+  expect(await ui.find({ text: /Old record row/ } as never)).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a change in a child session waits for a scan newer than itself, however fresh the last one was', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  const kid = '/p/kid.jsonl'
+  w.disk[kid] = [1, Date.now()]
+  w.scan.claude = [{ path: kid, mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Other', t0: new Date().toISOString(), desktop: { id: 'local_k', kind: 'code', parent: SID } }]
+  await $.session.start(START)
+  await clock.advance(9000)
+  const shared = () => w.modes().filter(m => m === 'all').length
+  // Force a scan one beat before the change: at 60 s, then the change lands at 63 s.
+  await clock.advance(54000)
+  const before = shared()
+  w.disk[kid] = [2, Date.now()]
+  await clock.advance(3000)
+  await clock.advance(3000)
+  expect(shared()).toBeGreaterThan(before)
+})
+
+test('a scan that failed leaves the record as it was', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  const kept = { v: 1, at: start - 3600e3, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
+  w.store.allScan = kept
+  w.scan = {}
+  await $.session.start(START)
+  await clock.advance(3000)
+  expect(w.modes()).toContain('all')
+  expect(w.store.allScan).toEqual(kept)
+})
+
+test('the All tab keeps the shared scan at 5 s while anything moves and 10 s while nothing does', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  await ui.press({ key: 's-all' })
+  const scans = () => w.modes().filter(m => m === 'all').length
+  const quiet = scans()
+  await clock.advance(30000)
+  // Beats fall every 3 s: past 10 s means every fourth.
+  expect(scans() - quiet).toBeGreaterThanOrEqual(2)
+  expect(scans() - quiet).toBeLessThanOrEqual(3)
+  w.scan.claude = [{ path: '/p/M.jsonl', mtime: clock.now() + 120e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(start).toISOString() }]
+  await clock.advance(12000)
+  const moving = scans()
+  await clock.advance(30000)
+  // Past 5 s means every second beat.
+  expect(scans() - moving).toBeGreaterThanOrEqual(4)
+  await ui.unmount()
+})
+
+test("this session's tab is drawn from the shared scan: its child session, its title, a run in its project", async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  const now = Date.now()
+  w.scan = {
+    dirs: [DAY], watch: [], titles: { [SID]: 'Title from Desktop' },
+    claude: [
+      { path: '/p/kid.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Other', t0: new Date(now - 60e3).toISOString(), title: 'Started from here', entry: 'claude-desktop', desktop: { id: 'local_k', kind: 'code', parent: SID } },
+      { path: '/p/stranger.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Some other chat' },
+    ],
+    codex: [{ path: `${DAY}/run.jsonl`, id: 'T1', cwd: '/x/Proj', mtime: now, tokIn: 5, tokOut: 2, t0: new Date(now - 60e3).toISOString(), originator: 'Codex Desktop', model: 'gpt-6', title: 'A run in this project' }],
+  }
+  await $.session.start(START)
+  await clock.advance(3000)
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  expect(await ui.find({ text: /Title from Desktop/ } as never)).toBeDefined()
+  expect(await ui.find({ text: /Started from here/ } as never)).toBeDefined()
+  expect(await ui.find({ text: /A run in this project/ } as never)).toBeDefined()
+  expect(await ui.find({ text: /Some other chat/ } as never)).toBeUndefined()
+  await ui.unmount()
+})
+
+test('with Finished on, a session this one started that went quiet past the shared window is still listed', async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  w.kin = [{ path: '/p/kid.jsonl', mtime: Date.now() - 86400e3, tokIn: 1, tokOut: 1, cwd: '/x/Other', t0: new Date(Date.now() - 2 * 86400e3).toISOString(), title: 'Quiet since yesterday', entry: 'claude-desktop', desktop: { id: 'local_k', kind: 'code', parent: SID } }]
+  await $.session.start(START)
+  await clock.advance(3000)
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  expect(w.modes()).not.toContain('codex')
+  await ui.press({ key: 'f-done' })
+  await clock.advance(3000)
+  expect(w.modes().filter(m => m === 'codex')).toHaveLength(1)
+  expect(await ui.find({ text: /Quiet since yesterday/ } as never)).toBeDefined()
+  await clock.advance(30000)
+  expect(w.modes().filter(m => m === 'codex')).toHaveLength(1)
+  await ui.unmount()
 })
