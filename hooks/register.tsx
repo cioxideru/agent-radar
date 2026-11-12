@@ -311,7 +311,7 @@ async function pollProject($: $) {
   // Desktop sessions this one started sit under it, as Claude Desktop draws them.
   const kids = [...claude, ...quiet].map(r => ({ ...claudeRow(r, now, lastProj!), parentId: 'main' }))
   const s = lastProj
-  const merged = (cur: Agent[]) => withThinking(mergeProject(cur, s, kids, live, past?.done ?? {}, now), rec?.s.claude ?? [], me)
+  const merged = (cur: Agent[]) => withJournal(mergeProject(cur, s, kids, live, past?.done ?? {}, now), [...(rec?.s.claude ?? []), ...(past?.recs ?? [])], me)
   const cur = await read($, agents)
   if (!same(merged(cur), cur)) await update($, agents, merged)
 
@@ -408,16 +408,24 @@ export const ranNothing = (r: { model?: string; tokIn: number; tokOut: number })
 export const thinkShare = (r: { reasoning?: number; tokOut: number }) =>
   typeof r.reasoning === 'number' && r.tokOut > 0 ? Math.min(1, r.reasoning / r.tokOut) : undefined
 
-// This session's own Claude rows count their tokens through the hooks, which carry no thinking count: it comes from
-// their journals in the shared scan (`recs`), as a share of the output the same journal counts, so it holds however
-// late the mod loaded. A journal gone quiet past the scan's window leaves the last reading.
-export function withThinking(cur: Agent[], recs: { path: string; reasoning?: number; tokOut: number }[], me: string): Agent[] {
+// This session's own Claude rows count their tokens through the hooks, which carry no thinking count and start over
+// with the session's process: a resumed chat would show only what it spent since. Their journals hold the whole
+// session (`recs`: the shared scan's and this load's own look back), so a row takes tokens, cache and thinking from
+// the record that counted the most wherever that is at least what the hooks counted, the hooks adding to it between
+// scans, and its model and effort while the hooks have seen none. The thinking share is always the journal's own.
+type JournalRec = Pick<Rec, 'path' | 'tokIn' | 'tokOut' | 'cacheRead' | 'cacheWrite' | 'reasoning' | 'model' | 'effort'>
+export function withJournal(cur: Agent[], recs: JournalRec[], me: string): Agent[] {
   return cur.map(a => {
     if (a.family !== 'claude' || scanned(a)) return a
     const tail = a.id === 'main' ? `/${me}.jsonl` : `/${me}/subagents/agent-${a.id}.jsonl`
-    const r = recs.find(x => x.path.endsWith(tail))
-    const share = r ? thinkShare(r) : undefined
-    return r && share !== undefined ? { ...a, stats: { ...a.stats, reasoning: r.reasoning, thinkShare: share } } : a
+    const r = recs.filter(x => x.path.endsWith(tail)).sort((x, y) => y.tokIn + y.tokOut - x.tokIn - x.tokOut)[0]
+    if (!r) return a
+    const share = thinkShare(r)
+    const thinking = share === undefined ? {} : { reasoning: r.reasoning, thinkShare: share }
+    const named = { model: a.model || (r.model ?? '').replace(/^claude-/, ''), effort: a.effort ?? r.effort }
+    return r.tokIn + r.tokOut < a.tokIn + a.tokOut
+      ? { ...a, ...named, stats: { ...a.stats, ...thinking } }
+      : { ...a, ...named, tokIn: r.tokIn, tokOut: r.tokOut, stats: { ...a.stats, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, ...thinking } }
   })
 }
 
@@ -431,7 +439,7 @@ const statsOf = (r: Rec): Stats => ({
 const endShells = ($: $, told: Record<string, string>) =>
   update($, shells, l => l.map(s => (!ENDED.has(s.status) && told[s.id] ? { ...s, status: endStatus(told[s.id]!), t1: Date.now() } : s)))
 
-type Past = { done: Record<string, string>; at: Record<string, string>; bg: { id: string; cmd: string; title?: string; ts?: string; timeout?: number }[] }
+type Past = { done: Record<string, string>; at: Record<string, string>; bg: { id: string; cmd: string; title?: string; ts?: string; timeout?: number }[]; recs?: Rec[] }
 // An agent launch is listed too, under its family's mark.
 export const kindOf = (cmd: string): Shell['kind'] => (CODEX.test(cmd) ? 'codex' : CLAUDE_P.test(cmd) ? 'claude' : undefined)
 // Over the budget, the oldest ended commands go first (`drop--` counts them off); running ones stay while any ended remain.
@@ -733,7 +741,12 @@ export const register: Register = (on, options) => {
           a.id !== id ? a : {
             ...a, model: (u.model || e.model).replace(/^claude-/, ''), effort: typeof e.effort === 'string' ? e.effort : a.effort,
             tokIn: a.tokIn + u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens,
-            tokOut: a.tokOut + u.output_tokens, stats: { ...a.stats, lastAt: Date.now() },
+            tokOut: a.tokOut + u.output_tokens,
+            // The cache too, so the details split the input as the journal does, on top of what it said.
+            stats: {
+              ...a.stats, lastAt: Date.now(),
+              cacheRead: (a.stats?.cacheRead ?? 0) + u.cache_read_input_tokens, cacheWrite: (a.stats?.cacheWrite ?? 0) + u.cache_creation_input_tokens,
+            },
           })
       })
     }
@@ -826,25 +839,21 @@ export const register: Register = (on, options) => {
     }
     const cols = e.props.bodyColumns ?? 100
     const web = e.surface !== 'terminal'
-    // A desktop draws the headers in a proportional font, where Cyrillic capitals run about a tenth wider than a cell:
-    // a column under such a label takes the cells it needs, so УСИЛИЕ, МЫШЛ. and ВРЕМЯ are never cut.
-    const headW = (label: string, w: number) => (web && /[А-ЯЁ]/.test(label) ? Math.max(w, Math.ceil(label.length * 1.1)) : w)
-    const effShortW = headW(t.head.effortShort, W.effShort), effLongW = headW(t.head.effort, W.eff)
-    const ctxW = headW(t.head.ctx, W.ctx), thkW = headW(t.head.thk, W.thk)
-    // Narrowing steps: the launch column goes first, then effort shrinks to a two-character code under a short header
-    // and models to their short names, then TIME goes, and only then do rows become two-line cards. TIME goes when the
-    // narrowed row's fixed cells (padding, dot, model, effort, tokens, context, thinking, time and the seven gaps) leave
-    // the title fewer than MIN_TITLE cells; cards come when the same row without TIME and its gap does.
-    const narrowRow = 2 + 2 + W.modelShort + effShortW + (web ? W.bar : 4 + 1 + W.bar) + ctxW + thkW + W.time + 7
+    // Narrowing steps: the launch column goes first, then effort shrinks to a two-character code and models to their
+    // short names, then TIME goes, and only then do rows become two-line cards. TIME goes when the narrowed row's fixed
+    // cells (padding, dot, model, effort, tokens, context, thinking, time and the seven gaps) leave the title fewer
+    // than MIN_TITLE cells; cards come when the same row without TIME and its gap does. The table has no header row:
+    // each cell reads by its look, and the details name everything.
+    const narrowRow = 2 + 2 + W.modelShort + W.effShort + (web ? W.bar : 4 + 1 + W.bar) + W.ctx + W.thk + W.time + 7
     const showTime = cols >= narrowRow + MIN_TITLE
     const compact = cols < narrowRow - W.time - 1 + MIN_TITLE, tight = cols < 88, showHow = cols >= 96, showEff = true
-    const effW = tight ? effShortW : effLongW, modelW = tight ? W.modelShort : W.model
+    const effW = tight ? W.effShort : W.eff, modelW = tight ? W.modelShort : W.model
     // Token column: count over a bar (desktop), count beside a bar (terminal); narrowed with the effort column.
     const barW = web ? (tight ? W.bar : W.bar + 2) : W.bar, numW = tight ? 4 : W.tok
     const fmtTok = tight ? fmtKShort : fmtK
     // A card's second line still has room for the five-square effort meter down to this width: padding, dot, model,
     // meter, tokens, context, thinking, their gaps and a few cells of tree indent.
-    const cardEffLong = cols >= 2 + 2 + W.cmodel + effLongW + barW + ctxW + thkW + 6 + 6
+    const cardEffLong = cols >= 2 + 2 + W.cmodel + W.eff + barW + W.ctx + W.thk + 6 + 6
     const setView = (p: Partial<View>) => update($, viewA, v => ({ ...v, ...p }))
     const running = list.filter(a => a.status === 'running').length
     const nCodex = list.filter(a => a.family === 'codex').length
@@ -861,10 +870,10 @@ export const register: Register = (on, options) => {
     const shownIds = new Set(shown.map(a => a.id))
     const left = listed.filter(a => !shownIds.has(a.id)).length
     const maxTok = Math.max(1, ...shown.map(a => a.tokIn + a.tokOut))
-    // TIME is as wide as its header or the longest time shown, up to the room "21h30m" needs, so a list of minutes keeps
-    // no empty cells beside THKG; centered there on graphical surfaces, as the columns before it are. The narrowing
-    // above counts its widest, so a growing time never moves the list to another step.
-    const timeW = Math.min(W.time, Math.max(headW(t.head.time, t.head.time.length), ...shown.map(a => fmtT((a.t1 ?? now) - a.t0).length)))
+    // TIME is as wide as the longest time shown, up to the room "21h30m" needs, so a list of minutes keeps no empty
+    // cells beside THKG; centered there on graphical surfaces, as the columns before it are. The narrowing above counts
+    // its widest, so a growing time never moves the list to another step.
+    const timeW = Math.min(W.time, Math.max(2, ...shown.map(a => fmtT((a.t1 ?? now) - a.t0).length)))
     const timeAlign = web ? 'center' : 'flex-end'
     // 'main' stands for this session: in "All" it is the scanned row carrying this session's id.
     const selId = view.sel === 'main' && view.scope === 'all' ? shown.find(a => a.family === 'claude' && a.sid === meSid)?.id : view.sel
@@ -875,20 +884,6 @@ export const register: Register = (on, options) => {
     const PINNED = ' pinned'
     const groupOf = (a: Agent) => (pinned.has(rootOf(a).id) ? PINNED : rootOf(a).project.toLowerCase())
     const projects = [...new Map(shown.map(a => [groupOf(a), groupOf(a) === PINNED ? t.pinnedGroup : rootOf(a).project])).entries()].sort(([x], [y]) => x.localeCompare(y))
-
-    const head = (
-      <Box key="head" flexDirection="row" gap={1} paddingX={1} width="100%">
-        <Box width={2} flexShrink={0}><Text> </Text></Box>
-        <Box flexGrow={1} flexShrink={1} minWidth={0}><Text dimColor bold>{t.head.task}</Text></Box>
-        <Box width={modelW} flexShrink={0} overflow="hidden"><Text dimColor bold>{tight ? t.head.modelShort : t.head.model}</Text></Box>
-        {showEff && <Box width={effW} flexShrink={0} overflow="hidden"><Text dimColor bold>{tight ? t.head.effortShort : t.head.effort}</Text></Box>}
-        <Box width={web ? barW : numW + 1 + barW} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{tight ? t.head.tokensShort : t.head.tokens}</Text></Box>
-        <Box width={ctxW} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{t.head.ctx}</Text></Box>
-        <Box width={thkW} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{t.head.thk}</Text></Box>
-        {showTime && <Box width={timeW} flexShrink={0} overflow="hidden" justifyContent={timeAlign}><Text dimColor bold>{t.head.time}</Text></Box>}
-        {showHow && <Box width={W.how} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.how}</Text></Box>}
-      </Box>
-    )
 
     // A 3 px bar stretched across its cell, so the number above sits close and the row stays one line plus a hair.
     const thinBar = (share: number, color: string, alt = Math.round(share * 100) + '%') =>
@@ -913,9 +908,9 @@ export const register: Register = (on, options) => {
       )
     }
     // Share of the context window in use, colored by how full it is.
-    const ctxCell = (a: Agent) => pctCell('x' + a.id.slice(-40), ctxW, ctxOf(a), ctxColor)
+    const ctxCell = (a: Agent) => pctCell('x' + a.id.slice(-40), W.ctx, ctxOf(a), ctxColor)
     // Share of the output spent thinking, in pinks of its own, where the journal counts it.
-    const thinkCell = (a: Agent) => pctCell('h' + a.id.slice(-40), thkW, a.stats?.thinkShare, thinkColor)
+    const thinkCell = (a: Agent) => pctCell('h' + a.id.slice(-40), W.thk, a.stats?.thinkShare, thinkColor)
     // Tokens spent: the count in small type over a bar scaled to the busiest agent shown (desktop); count and bar side by side (terminal).
     const tokCell = (a: Agent) => {
       const t = a.tokIn + a.tokOut
@@ -1047,7 +1042,7 @@ export const register: Register = (on, options) => {
           {tokCell(a)}
           {ctxCell(a)}
           {thinkCell(a)}
-          {showTime && <Box width={timeW} flexShrink={0} overflow="hidden" justifyContent={timeAlign}><Text mono={web || undefined} dimColor={!!a.t1}>{fmtT((a.t1 ?? now) - a.t0)}</Text></Box>}
+          {showTime && <Box key={'t' + k} width={timeW} flexShrink={0} overflow="hidden" justifyContent={timeAlign}><Text mono={web || undefined} dimColor={!!a.t1}>{fmtT((a.t1 ?? now) - a.t0)}</Text></Box>}
           {showHow && <Box width={W.how} flexShrink={0} overflow="hidden">{howCell(a)}</Box>}
         </Box>
       )
@@ -1114,7 +1109,7 @@ export const register: Register = (on, options) => {
               <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (modelLabel(a.model) || '…') + ' '}</Text>
             </Box>
             {cardEffLong
-              ? <Box width={effLongW} flexShrink={0} alignItems="center">{effLong(a.effort)}</Box>
+              ? <Box width={W.eff} flexShrink={0} alignItems="center">{effLong(a.effort)}</Box>
               : <Box width={2} flexShrink={0} alignItems="center">{effShort(a.effort)}</Box>}
             {tokCell(a)}
             {ctxCell(a)}
@@ -1479,7 +1474,6 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
         <Box flexDirection="column">
-          {!compact && head}
           {shown.length === 0 && <Box paddingX={1}><Text dimColor>{view.scope === 'all' ? t.scanning : t.none}</Text></Box>}
           {left > 0 && <Box paddingX={1}><Text dimColor>{t.moreRows(left)}</Text></Box>}
           {view.scope === 'proj'

@@ -1,6 +1,6 @@
 """Self-check of scan.py on fictional journals in a temporary home: quiet parents are read for their active children
 (a session for its subagent, an agent for a nested one, a Codex thread for its child), a chat Remote Control holds
-open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, every live session's Desktop title comes with the scan of all, a session's own scan finds what it started, a Desktop record unchanged is not read again, a thread's name is its last, a git worktree anywhere names its repository, and a session's thinking tokens are summed where its replies count them. Run: python3 -I tests/scan_test.py"""
+open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, every live session's Desktop title comes with the scan of all, a session's own scan finds what it started, a Desktop record unchanged is not read again, a thread's name is its last, a git worktree anywhere names its repository, a session's thinking tokens are summed where its replies count them, and a load's look back returns each journal read whole. Run: python3 -I tests/scan_test.py"""
 import json, os, subprocess, sys, tempfile, time, datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,6 +60,10 @@ with tempfile.TemporaryDirectory() as home:
     write(P + 'S3.jsonl', [user, thought('m2', 40, 30), thought('m3', 20, 5), thought('m4', 9, None), dict(reply, message=dict(reply['message'], id='m5'))], FRESH)
     s3 = next(r for r in scan(home, 'all', '15')['claude'] if r['path'].endswith('/S3.jsonl'))
     assert s3['reasoning'] == 35 and s3['tokOut'] == 74, s3
+    # A load's look back reads the session's journal whole, and its subagents', for what the hooks have not seen.
+    back = scan(home, 'ended', '0', P + 'S3.jsonl')['recs']
+    assert [(r['tokIn'], r['tokOut'], r['reasoning']) for r in back] == [(40, 74, 35)], back
+    assert {r['path'].split('/')[-1] for r in scan(home, 'ended', '0', P + 'S1.jsonl')['recs']} == {'S1.jsonl', 'agent-a1.jsonl', 'agent-a2.jsonl'}
 
     # A chat Remote Control holds open: listed while quiet, titled from beside its journal, and only while alive.
     # A Desktop chat with Remote Control on, and a record whose process is gone, stay out.

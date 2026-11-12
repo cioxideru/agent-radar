@@ -224,7 +224,8 @@ def remote(recs):
 if mode == 'ended':
     done, at, bg = {}, {}, []
     # The session's own journal and its subagents': a subagent's background commands are the session's too.
-    for p in [q for j in extra for q in [j] + files(j[:-6] + '/subagents/agent-*.jsonl')]:
+    journals = [q for j in extra for q in [j] + files(j[:-6] + '/subagents/agent-*.jsonl')]
+    for p in journals:
         for l in open(p, errors='replace'):
             if ('"run_in_background":true' in l or '"name":"Monitor"' in l) and '"type":"assistant"' in l:
                 d = load(l)
@@ -244,7 +245,10 @@ if mode == 'ended':
                 if u and st:
                     done[u.group(1)] = st.group(1)
                     at[u.group(1)] = load(l).get('timestamp')
-    print(json.dumps({'done': done, 'at': at, 'bg': bg}))
+    # And each journal read whole: the hooks count a session's tokens only from its process's start, so a resumed chat
+    # would show what it spent since then; the journal holds them all.
+    recs = [claude(p, os.stat(p).st_mtime) for p in journals]
+    print(json.dumps({'done': done, 'at': at, 'bg': bg, 'recs': recs}))
     sys.exit()
 
 def desktop():

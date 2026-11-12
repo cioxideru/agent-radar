@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, sparkline, stackBar } from '../hooks/charts'
 
 import type { Agent, Shell } from '../types'
-import { asq, ctxColor, effCode, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, modelShort, ordered, ownScan, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, thinkColor, thinkShare, trimShells, withThinking } from '../hooks/register'
+import { asq, ctxColor, effCode, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, modelShort, ordered, ownScan, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, thinkColor, thinkShare, trimShells, withJournal } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -86,18 +86,25 @@ test("the thinking share is of the output its own journal counts, for this sessi
   expect(rows.map(r => r.stats?.thinkShare)).toEqual([0.25, undefined, 0.75])
   expect(thinkShare({ reasoning: 9, tokOut: 0 })).toBeUndefined()
   expect(thinkShare({ reasoning: 12, tokOut: 10 })).toBe(1)
-  // The hooks counted 7 output tokens since the mod loaded; the share is the journal's, of the output it counts.
+  // The hooks counted from the process's start. A journal that counted more gives a row its tokens, cache and thinking
+  // (of two records for one journal, the fuller), a fresher hook count keeps its tokens and takes the journal's share
+  // alone, a row the hooks saw no reply on takes the journal's model and effort, and a journal row is left as it is.
   const main: Agent = { id: 'main', project: 'Proj', title: 'Main session', model: 'opus-5-5', family: 'claude', tokIn: 1, tokOut: 7, t0: now, status: 'running', how: 'Claude Code session', stats: { ctx: 10 } }
   const sub: Agent = { ...main, id: 'a1', parentId: 'main', title: 'Audit', stats: undefined }
   const quiet: Agent = { ...main, id: 'a2', parentId: 'main', title: 'Quiet', stats: { reasoning: 1, thinkShare: 0.5 } }
+  const resumed: Agent = { ...main, id: 'a3', parentId: 'main', title: 'Resumed', model: '', tokIn: 0, tokOut: 0, stats: undefined }
   const child: Agent = { ...main, id: '/p/k.jsonl', journal: '/p/k.jsonl', title: 'Child' }
-  const out = withThinking([main, sub, quiet, child], [
-    { path: '/h/.claude/projects/-x-Proj/S1.jsonl', tokOut: 400, reasoning: 100 },
-    { path: '/h/.claude/projects/-x-Proj/S1/subagents/agent-a1.jsonl', tokOut: 10, reasoning: 4 },
-    { path: '/p/k.jsonl', tokOut: 10, reasoning: 10 },
+  const S1 = '/h/.claude/projects/-x-Proj/S1'
+  const out = withJournal([main, sub, quiet, resumed, child], [
+    { path: S1 + '.jsonl', tokIn: 500, tokOut: 200, reasoning: 50 },
+    { path: S1 + '.jsonl', tokIn: 900, tokOut: 400, cacheRead: 800, cacheWrite: 50, reasoning: 100, model: 'claude-opus-5-5' },
+    { path: S1 + '/subagents/agent-a1.jsonl', tokIn: 1, tokOut: 4, reasoning: 2 },
+    { path: S1 + '/subagents/agent-a3.jsonl', tokIn: 30, tokOut: 20, model: 'claude-fable-5-2', effort: 'high' },
+    { path: '/p/k.jsonl', tokIn: 1, tokOut: 10, reasoning: 10 },
   ], 'S1')
-  expect(out.map(a => a.stats?.thinkShare)).toEqual([0.25, 0.4, 0.5, undefined])
-  expect(out[0]!.stats).toEqual({ ctx: 10, reasoning: 100, thinkShare: 0.25 })
+  expect(out.map(a => [a.tokIn, a.tokOut, a.stats?.thinkShare])).toEqual([[900, 400, 0.25], [1, 7, 0.5], [1, 7, 0.5], [30, 20, undefined], [1, 7, undefined]])
+  expect(out[0]!.stats).toEqual({ ctx: 10, cacheRead: 800, cacheWrite: 50, reasoning: 100, thinkShare: 0.25 })
+  expect([out[0]!.model, out[3]!.model, out[3]!.effort]).toEqual(['opus-5-5', 'fable-5-2', 'high'])
 })
 
 test('nests a codex subagent under its parent thread and shortens times', () => {
