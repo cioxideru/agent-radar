@@ -31,6 +31,8 @@ export type Stats = {
   cacheRead?: number
   cacheWrite?: number
   reasoning?: number
+  // The share of the output spent thinking, 0..1, by one journal's counts; absent where it records none.
+  thinkShare?: number
   ctx?: number
   ctxWindow?: number
   limitPct?: number

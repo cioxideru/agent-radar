@@ -11,7 +11,52 @@ test('pane draws a codex row with its columns on terminal and desktop', async ($
     expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /gpt-6-astra/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /■■■■■/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^THKG$/ })).toBeDefined()
+    // The level's name over its squares in their purple; the terminal's one-line row has the squares alone.
+    const level = await ui.find({ type: 'Text', text: /^Max$/ })
+    if (surface === 'desktop') expect(level?.props).toMatchObject({ color: '#a98bf0', size: 'footnote' })
+    else expect(level).toBeUndefined()
     await ui.unmount()
+  }
+})
+
+test('a narrowed pane keeps one-line rows with short model names and effort codes, then drops TIME, down to a twelve-cell title', async ($, on) => {
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra -c model_reasoning_effort=xhigh "Review the diff please"', description: 'Diff review', run_in_background: true })
+  for (const [surface, bodyColumns] of [['desktop', 51], ['terminal', 56]] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns } as never })
+    expect(await ui.find({ type: 'Text', text: /TASK/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^ M $|^M$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: / 60A / })).toBeDefined()
+    // xhigh as a bold xH in its level's blue.
+    expect((await ui.find({ type: 'Text', text: /^xH$/ }))?.props).toMatchObject({ bold: true, color: '#5aa9e6' })
+    expect(await ui.find({ type: 'Text', text: /^THKG$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^TIME$/ })).toBeDefined()
+    await ui.unmount()
+    // One cell less and the title would get eleven: TIME goes with its gap, which gives the title seven more cells;
+    // past those, cards.
+    for (const [width, table] of [[bodyColumns - 1, true], [bodyColumns - 7, true], [bodyColumns - 8, false]] as const) {
+      const narrower = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: width } as never })
+      expect(await narrower.find({ type: 'Text', text: /^TIME$/ })).toBeUndefined()
+      expect(!!(await narrower.find({ type: 'Text', text: /TASK/ }))).toBe(table)
+      if (table) expect(await narrower.find({ type: 'Text', text: /^THKG$/ })).toBeDefined()
+      await narrower.unmount()
+    }
+  }
+})
+
+test("the token sums stay on the counters' line: in, out and total, then the total alone, then nothing, never a line of their own", async ($, on) => {
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    // At 50 columns the table still shows (TIME dropped), yet the counters leave no room for "Total 0" beside them.
+    for (const [bodyColumns, io, total] of [[110, true, true], [80, false, true], [50, false, false]] as const) {
+      const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns } as never })
+      expect(await ui.find({ type: 'Text', text: /TASK/ })).toBeDefined()
+      expect(!!(await ui.find({ type: 'Text', text: /^In $/ }))).toBe(io)
+      expect(!!(await ui.find({ type: 'Text', text: /^Total $/ }))).toBe(total)
+      await ui.unmount()
+    }
   }
 })
 
@@ -19,7 +64,7 @@ test('a narrow pane draws two-line cards without the header', async ($, on) => {
   on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
   await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true })
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 50 } as never })
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 40 } as never })
     expect(await ui.find({ type: 'Text', text: /TASK/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /gpt-6-astra/ })).toBeDefined()
@@ -33,7 +78,7 @@ test('a narrow desktop pane nests a codex run under its subagent with a rail', a
   await $.agent.spawn({ prompt: 'audit', description: 'Geometry audit', subagentType: 'general-purpose' } as never)
   await $.tool.call({ tool: 'Bash', command: 'codex exec -m gpt-6-astra "Review the diff please"', description: 'Diff review', run_in_background: true, agentId: 'A1' } as never)
   for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 50 } as never })
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 40 } as never })
     expect(await ui.find({ type: 'Text', text: /Geometry audit/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Diff review/ })).toBeDefined()
     await ui.unmount()
@@ -50,6 +95,50 @@ test('details open under the pressed row with token chart on both surfaces', asy
     expect(await ui.find({ type: 'Text', text: /^Tokens/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /running/ })).toBeDefined()
     await ui.press({ key: (title as { key: string }).key })
+    await ui.unmount()
+  }
+})
+
+test('the THKG column and the details show the share of the output spent thinking, where the journal counts it', async ($, on) => {
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  const now = Date.now()
+  mock.clock(on, { now })
+  const row = (path: string, title: string, reasoning?: number) => ({ path, mtime: now, tokIn: 10, tokOut: 2000, reasoning, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title })
+  mock.store(on, { allScan: { v: 3, at: now, mins: 15, s: { codex: [], claude: [row('/p/t1.jsonl', 'Deep thinker', 880), row('/p/t2.jsonl', 'Older journal')] } } })
+  const press = async (ui: { find: (q: never) => Promise<unknown>; press: (q: { key: string }) => Promise<unknown> }, title: RegExp) =>
+    ui.press({ key: ((await ui.find({ type: 'Button', text: title } as never)) as { key: string }).key })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+    await ui.press({ key: 's-all' })
+    // The row's own cell, before any details open, in the pink for a quarter to a half.
+    expect((await ui.find({ type: 'Text', text: /^44%$/ }))?.props.color).toBe('#f472b6')
+    await press(ui, /Deep thinker/)
+    expect(await ui.find({ type: 'Text', text: /^Thinking 880 · 44% of output$/ })).toBeDefined()
+    // A meter on the desktop, 13 of 30 glyphs in the terminal.
+    expect(await ui.find(surface === 'desktop' ? { type: 'Svg', alt: 'thinking share of output' } as never : { type: 'Text', text: /^━{13}$/ })).toBeDefined()
+    await press(ui, /Older journal/)
+    expect(await ui.find({ type: 'Text', text: /^Tokens/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Thinking/ })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('TIME is as wide as its header or its longest time, centered on the desktop as the columns before it', async ($, on) => {
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  const now = Date.now()
+  mock.clock(on, { now })
+  const row = (path: string, title: string, ago: number) => ({ path, mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - ago).toISOString(), title })
+  mock.store(on, { allScan: { v: 3, at: now, mins: 15, s: { codex: [], claude: [row('/p/a.jsonl', 'Minutes', 37 * 60e3), row('/p/b.jsonl', 'Hours', (3 * 60 + 12) * 60e3)] } } })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+    const time = async () => ((await ui.findAll({ type: 'Box' } as never)) as { text: string; props: object }[]).find(b => b.text === 'TIME')?.props
+    // This session's tab with nothing in it (the view stays from the mount before): the header's four cells.
+    await ui.press({ key: 's-proj' })
+    expect(await time()).toMatchObject({ width: 4, justifyContent: surface === 'desktop' ? 'center' : 'flex-end' })
+    // 37m and 3h12m: five cells for the longer, none kept for "21h30m".
+    await ui.press({ key: 's-all' })
+    expect(await time()).toMatchObject({ width: 5 })
+    expect(await ui.find({ type: 'Text', text: /^3h12m$/ })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -92,6 +181,12 @@ test('the language option switches the pane to Russian', { options: { language: 
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
   expect(await ui.find({ type: 'Text', text: /ЗАДАЧА/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /TASK/ })).toBeUndefined()
+  // A desktop's Cyrillic capitals are wider than a cell: their columns take a tenth more, where English keeps its own.
+  type El = { type: string; props: Record<string, unknown>; children?: unknown[] }
+  const over = (n: El, label: string): unknown => (n.children ?? []).some(c => (c as El).type === 'Text' && (c as El).children?.join('') === label)
+    ? n.props.width : (n.children ?? []).map(c => (typeof c === 'object' && c ? over(c as El, label) : undefined)).find(w => w !== undefined)
+  const tree = (await ui.drawn()) as unknown as El
+  expect([over(tree, 'УСИЛИЕ'), over(tree, 'КОНТ.'), over(tree, 'МЫШЛ.'), over(tree, 'ВРЕМЯ')]).toEqual([7, 6, 6, 6])
   await ui.unmount()
 })
 
@@ -142,7 +237,7 @@ test('the All scope reuses a fresh scan another chat left in the store', async (
   on('process.run', () => { runs++; return { value: { exitCode: 1, stdout: '', stderr: '' } } as never })
   const now = Date.now()
   mock.clock(on, { now })
-  mock.store(on, { allScan: { v: 1, at: now, mins: 15, s: { codex: [], claude: [
+  mock.store(on, { allScan: { v: 3, at: now, mins: 15, s: { codex: [], claude: [
     { path: '/p/s9.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Shared scan row' },
   ] } } })
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
@@ -159,7 +254,7 @@ test("this chat's own session title stands out on a tint", async ($, on) => {
     next({ ...e, value: [main, ...e.value.filter(a => (a as { id: string }).id !== 'main')] })) as never)
   // A fresh All scan holding this session's journal and another chat's.
   mock.clock(on, { now: Date.now() })
-  mock.store(on, { allScan: { v: 1, at: Date.now(), mins: 15, s: { codex: [], claude: [
+  mock.store(on, { allScan: { v: 3, at: Date.now(), mins: 15, s: { codex: [], claude: [
     { path: '/p/S1.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date().toISOString(), title: 'Own journal row' },
     { path: '/p/S2.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date().toISOString(), title: 'Other chat row' },
   ] } } })
@@ -256,12 +351,12 @@ test('a chat Remote Control holds open stays listed under its own mark, past the
   const now = Date.now()
   const quiet = { tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 864e5).toISOString(), mtime: now - 3600e3 }
   mock.clock(on, { now })
-  mock.store(on, { allScan: { v: 1, at: now, mins: 15, s: { codex: [], claude: [
+  mock.store(on, { allScan: { v: 3, at: now, mins: 15, s: { codex: [], claude: [
     { ...quiet, path: '/p/R.jsonl', title: 'Held chat', entry: 'remote-control', live: true },
     { ...quiet, path: '/p/E.jsonl', title: 'Ended chat', entry: 'remote-control' },
     ...Array.from({ length: 50 }, (_, i) => ({ path: `/p/n${i}.jsonl`, mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Newer ' + i })),
   ] } } })
-  for (const [surface, bodyColumns] of [['desktop', 110], ['desktop', 50], ['terminal', 110]] as const) {
+  for (const [surface, bodyColumns] of [['desktop', 110], ['desktop', 40], ['terminal', 110]] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns } as never })
     await ui.press({ key: 's-all' })
     expect(await ui.find({ text: /Held chat/ } as never)).toBeDefined()
@@ -278,7 +373,7 @@ test('among all sessions a quiet session still heads its running subagent, so th
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
   const now = Date.now()
   mock.clock(on, { now })
-  mock.store(on, { allScan: { v: 1, at: now, mins: 15, s: { codex: [], claude: [
+  mock.store(on, { allScan: { v: 3, at: now, mins: 15, s: { codex: [], claude: [
     { path: '/p/Q.jsonl', mtime: now - 40 * 60e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 3600e3).toISOString(), title: 'Quiet lead' },
     { path: '/p/Q/subagents/agent-b1.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), meta: { description: 'Busy helper' } },
   ] } } })
@@ -366,7 +461,7 @@ test('a quiet session starts Python for the shared scan once a minute, and for a
   // Load: the shared scan and one look back through the journal.
   await clock.advance(6000)
   expect(w.modes()).toEqual(['all', 'ended'])
-  expect((w.store.allScan as { v: number }).v).toBe(1)
+  expect((w.store.allScan as { v: number }).v).toBe(3)
   await clock.advance(30000)
   expect(w.runs).toHaveLength(2)
   // A new rollout is read on its own at the next beat.
@@ -486,7 +581,7 @@ test('closing the pane in another chat arrives within twelve seconds, and the st
 test("a chat reads another's fresh scan instead of making its own, and a stale one starts a scan the next chat honors", async ($, on) => {
   const clock = mock.clock(on, { now: start })
   const w = session(on)
-  w.store.allScan = { v: 1, at: start + 2000, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
+  w.store.allScan = { v: 3, at: start + 2000, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
   await $.session.start(START)
   await clock.advance(3000)
   expect(w.modes()).toEqual(['ended'])
@@ -509,7 +604,7 @@ test("a record of another version is left alone: its rows are not drawn and this
   await $.session.start(START)
   await clock.advance(3000)
   expect(w.modes()).toEqual(['all', 'ended'])
-  expect((w.store.allScan as { v: number }).v).toBe(1)
+  expect((w.store.allScan as { v: number }).v).toBe(3)
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
   await ui.press({ key: 's-all' })
   expect(await ui.find({ text: /Old record row/ } as never)).toBeUndefined()
@@ -537,7 +632,7 @@ test('a change in a child session waits for a scan newer than itself, however fr
 test('a scan that failed leaves the record as it was', async ($, on) => {
   const clock = mock.clock(on, { now: start })
   const w = session(on)
-  const kept = { v: 1, at: start - 3600e3, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
+  const kept = { v: 3, at: start - 3600e3, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
   w.store.allScan = kept
   w.scan = {}
   await $.session.start(START)
@@ -586,6 +681,20 @@ test("this session's tab is drawn from the shared scan: its child session, its t
   expect(await ui.find({ text: /Started from here/ } as never)).toBeDefined()
   expect(await ui.find({ text: /A run in this project/ } as never)).toBeDefined()
   expect(await ui.find({ text: /Some other chat/ } as never)).toBeUndefined()
+  await ui.unmount()
+})
+
+test("this session's row takes its thinking from its journal in the shared scan, and the context's write keeps it", async ($, on) => {
+  const clock = mock.clock(on, { now: start })
+  const w = session(on)
+  w.scan.claude = [{ path: `/h/.claude/projects/-x-Proj/${SID}.jsonl`, mtime: Date.now(), tokIn: 10, tokOut: 400, reasoning: 100, cwd: '/x/Proj', t0: new Date(Date.now() - 60e3).toISOString() }]
+  await $.session.start(START)
+  await clock.advance(3000)
+  // The pane opens on this session's details.
+  const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
+  expect(await ui.find({ type: 'Text', text: /^Thinking 100 · 25% of output$/ })).toBeDefined()
+  // And in its THKG cell.
+  expect(await ui.find({ type: 'Text', text: /^25%$/ })).toBeDefined()
   await ui.unmount()
 })
 

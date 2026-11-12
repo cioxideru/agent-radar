@@ -8,13 +8,13 @@ import { SCAN_PY } from './scan'
 
 type $ = EngineInterface
 // dirs: the folders a new rollout lands in; watch: the folders of Desktop's records; titles: Desktop's title of each
-// live session, by its id.
+// live session, by its id; repos: the repository of each listed folder that is a git worktree.
 // records: what Desktop's records say, which the next scan need not read again; it stays with this chat, out of the store.
-type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string>; records?: unknown }
+type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string>; repos?: Record<string, string>; records?: unknown }
 // The machine-wide scan both tabs draw from, as it lies in the shared store. `v` tells this shape: a chat still on an
 // older mod writes none, a newer one another number, and each scans for itself rather than read the other's.
 type Shared = { v: number; at: number; mins: number; s: Scan }
-const SCHEMA = 1
+const SCHEMA = 3
 type Rec = {
   path: string; mtime: number; size?: number; tokIn: number; tokOut: number; cwd?: string; t0?: string
   model?: string; effort?: string; title?: string
@@ -50,15 +50,24 @@ const ACTIVE_MIN = 15
 const PROJ_MIN = 5
 // ponytail: a fixed row budget (30 drew, 89 did not); pages or a "show more" if people want the old ones back.
 const MAX_ROWS = 40
-const EFF = ['low', 'medium', 'high', 'xhigh', 'max']
-// low → max: white, yellow, green, blue, purple.
-const EFF_COLOR = ['#e7e9ef', '#e8b23a', '#3fcf7f', '#5aa9e6', '#a98bf0']
+// ultra is above max, for when a model offers it; the engine knows low to max.
+const EFF = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+// low → ultra: white, yellow, green, blue, purple, rose.
+const EFF_COLOR = ['#e7e9ef', '#e8b23a', '#3fcf7f', '#5aa9e6', '#a98bf0', '#ff4d8d']
+// Each level's code for a narrowed pane, two characters at most, the width of its column.
+const EFF_CODE = ['Lw', 'Md', 'Hi', 'xH', 'Mx', 'U']
+// Each level's name, written over its squares in a wide row.
+const EFF_NAME = ['Low', 'Medium', 'High', 'xHigh', 'Max', 'Ultra']
+// An effort's place in EFF, -1 for none or a level not known here; ultracode is ultra by another name.
+const effIndex = (effort?: string) => EFF.indexOf(effort === 'ultracode' ? 'ultra' : effort ?? '')
 const HOW: Record<string, string> = {
   'claude-desktop': 'Claude Desktop', cli: 'Claude Code CLI', 'remote-control': 'Remote Control', 'sdk-ts': 'Agent SDK', 'sdk-py': 'Agent SDK',
   codex_exec: 'codex exec', 'Codex Desktop': 'Codex Desktop',
 }
 
 let root = ''
+// This session's project: its folder's name, or its repository's once a scan has found the folder to be a worktree.
+let here = ''
 // The pane's texts, picked by the `language` option when the module loads.
 let t: Strings = STRINGS.en
 // Launcher icons: our own drawn marks for Claude and Codex, the same in the rows and the project pills. The apps'
@@ -124,6 +133,11 @@ let swept = false
 
 // Context fill: green under half, blue to 75%, yellow to 90%, red above.
 export const ctxColor = (share: number) => (share < 0.5 ? '#3fcf7f' : share < 0.75 ? '#5aa9e6' : share < 0.9 ? '#e8b23a' : '#f06a5f')
+// Thinking's share of the output, in pinks of its own so it is never read as the context's fill: pale under a quarter,
+// pink to half, orchid to three quarters, deep fuchsia above.
+export const thinkColor = (share: number) => (share < 0.25 ? '#f9a8d4' : share < 0.5 ? '#f472b6' : share < 0.75 ? '#e879f9' : '#c026d3')
+// An effort as the narrowed column writes it: its level's code, '?' for a level not known here, '—' for none.
+export const effCode = (effort?: string) => EFF_CODE[effIndex(effort)] ?? (effort ? '?' : '—')
 const journalOf = (cwd: string, id: string) => `${home}/.claude/projects/${cwd.replace(/[^A-Za-z0-9]/g, '-')}/${id}.jsonl`
 const enc = encodeURIComponent
 // A new Claude Code session in the same folder that picks the work up from a journal.
@@ -136,9 +150,22 @@ export const asq = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 // A folder's last name, through a worktree to its project; a trailing separator (some journals write one) is not a name.
 export const projectOf = (cwd = '') =>
   cwd.replace(/[\\/]+$/, '').replace(/[\\/]\.(claude|codex)[\\/]worktrees[\\/].*$/, '').split(/[\\/]/).pop() || cwd
+// The same through a scan, which knows the repository of a worktree that lies anywhere else (repo/wt/<branch>).
+const projectIn = (s: Pick<Scan, 'repos'>, cwd = '') => projectOf(s.repos?.[cwd] ?? cwd)
 // A model as the rows show it: Codex's own models without the repeated "codex-" (codex-auto-review → auto-review), so
 // the narrow model column is not spent on an ellipsis. The details keep the full name.
 export const modelLabel = (m = '') => m.replace(/^codex-/, '')
+// The same on a narrowed row, where every cell counts: a word goes down to its capital and the version to its digits,
+// nothing between them, with GPT's name and a trailing date dropped (opus-5-5 → O55, fable-5-2 → F52, gpt-6-astra →
+// 60A, gpt-6.1-sol → 61S, haiku-4-5-20251001 → H45). A lone major version gets its minor, so the version is always
+// two digits as Claude's are. A one-word name ("codex", "o3") stays whole.
+export const modelShort = (m = '') => {
+  const parts = modelLabel(m).replace(/-\d{8}$/, '').replace(/^gpt-/i, '').split('-')
+  if (parts.length < 2) return parts.join('-')
+  const num = (w: string) => /^[\d.]+$/.test(w)
+  const minor = parts.filter(num).join('').replace(/\./g, '').length === 1 ? '0' : ''
+  return parts.map(w => (num(w) ? w.replace(/\./g, '') + minor : /^[a-z]+$/i.test(w) ? w[0]!.toUpperCase() : w.toUpperCase())).join('')
+}
 // A launch method without the family's name in front (Claude Desktop → Desktop, codex exec · bg → exec · bg), for
 // rows where the family's mark stands beside it.
 export const mechanism = (how: string) => how.replace(/^(Claude Code|Claude|Codex|codex) /, '')
@@ -172,7 +199,7 @@ async function upsert($: $, id: string, patch: Partial<Agent>, base?: Agent) {
 }
 
 const blank = (id: string, now: number): Agent => ({
-  id, parentId: id === 'main' ? undefined : 'main', project: projectOf(root), title: t.agent + id.slice(0, 8),
+  id, parentId: id === 'main' ? undefined : 'main', project: here || projectOf(root), title: t.agent + id.slice(0, 8),
   model: '', family: 'claude', tokIn: 0, tokOut: 0, t0: now, status: 'running', how: 'Agent',
 })
 
@@ -186,9 +213,12 @@ async function py($: $, args: string[], stdin = '{}') {
 }
 // 'codex:<id>' adds the Desktop sessions that session started. `last`, the previous scan, goes in on stdin: a journal
 // unchanged since (same mtime and size) is taken from it unread, and so is a Desktop record by the `records` kept here.
+// A scan that found this session's folder to be a worktree names its project, for the rows this session adds itself.
+const learnHere = (s: Scan) => void (s.repos?.[root] && (here = projectIn(s, root)))
 async function scan($: $, mode: string, mins: number, extra: string[], last?: Scan): Promise<Scan> {
   const r = (await py($, [mode, String(mins), ...extra], JSON.stringify({ ...last, records: mode === 'only' ? undefined : records }))) as Scan | undefined
   if (r?.records) (records = r.records), delete r.records
+  if (r) learnHere(r)
   return r ?? { codex: [], claude: [] }
 }
 
@@ -259,7 +289,9 @@ async function pollProject($: $) {
   if (diff.length > rollouts.length) owedSince = await $.clock.now()
   const rec = await pollAll($, !!owedSince && (shared?.at ?? 0) < owedSince)
   if (rollouts.length) for (const r of (await scan($, 'only', PROJ_MIN, rollouts, lastProj)).codex) own.set(r.path, r)
+  if (rec) learnHere(rec.s)
   lastProj = ownScan(rec?.s ?? { codex: [], claude: [] }, me, own, extra, now)
+  if (here && here !== list.find(a => a.id === 'main')?.project) await upsert($, 'main', { project: here })
   own = new Map(lastProj.codex.filter(r => own.has(r.path)).map(r => [r.path, r]))
   const { claude, title } = lastProj
   if (title && title !== list.find(a => a.id === 'main')?.title) await upsert($, 'main', { title })
@@ -277,9 +309,9 @@ async function pollProject($: $) {
   const inScan = new Set(claude.map(r => r.path))
   const quiet = view.showDone ? kin.filter(r => !inScan.has(r.path)) : []
   // Desktop sessions this one started sit under it, as Claude Desktop draws them.
-  const kids = [...claude, ...quiet].map(r => ({ ...claudeRow(r, now), parentId: 'main' }))
+  const kids = [...claude, ...quiet].map(r => ({ ...claudeRow(r, now, lastProj!), parentId: 'main' }))
   const s = lastProj
-  const merged = (cur: Agent[]) => mergeProject(cur, s, kids, live, past?.done ?? {}, now)
+  const merged = (cur: Agent[]) => withThinking(mergeProject(cur, s, kids, live, past?.done ?? {}, now), rec?.s.claude ?? [], me)
   const cur = await read($, agents)
   if (!same(merged(cur), cur)) await update($, agents, merged)
 
@@ -289,8 +321,9 @@ async function pollProject($: $) {
     if (raw) (compactWindow = raw), (compactAt = now)
     claudeWindow = compactWindow || usage.context.window
     const was = list.find(a => a.id === 'main')?.stats
+    // Into the stats the row holds now, so the thinking the merge above just took from the journal stays.
     if (was?.ctx !== usage.context.tokens || was?.ctxWindow !== claudeWindow)
-      await upsert($, 'main', { stats: { ctx: usage.context.tokens, ctxWindow: claudeWindow, lastAt: now } })
+      await update($, agents, l => l.map(a => (a.id === 'main' ? { ...a, stats: { ...a.stats, ctx: usage.context.tokens, ctxWindow: claudeWindow, lastAt: now } } : a)))
   }
   const rows = await read($, agents)
   const running = rows.filter(a => a.status === 'running' && a.id !== 'main').length
@@ -320,7 +353,7 @@ export function ownScan(s: Scan, me: string, own: Map<string, Rec>, extra: strin
   }
   const launchers = new Set(claude.map(r => r.path))
   const codex = [...keep].map(r => (r.launch && !launchers.has(r.launch.path) ? { ...r, launch: undefined } : r))
-  return { codex, claude, title: s.titles?.[me], dirs: s.dirs, watch: s.watch }
+  return { codex, claude, title: s.titles?.[me], dirs: s.dirs, watch: s.watch, repos: s.repos }
 }
 
 // This session's list after a poll: the hooks' rows brought up to date from the live agents (`live`: id → status) and
@@ -357,7 +390,7 @@ export function mergeProject(cur: Agent[], s: Scan, kids: Agent[], live: Map<str
   // Rollouts nobody here launched: this project's that still run (Codex Desktop, another terminal), and any under a
   // listed row (a child thread of a run here, a run a Desktop child session launched), finished or not.
   const ids = new Set([...next, ...kids].map(a => a.id))
-  for (const row of codexRows(s.codex, kids, now).map(under)) {
+  for (const row of codexRows(s.codex, kids, now, s).map(under)) {
     if (claimed.has(row.id)) continue
     const nested = !!row.parentId && ids.has(row.parentId)
     if (nested || (inRoot(row.cwd) && row.status !== 'completed')) next = [...next, row]
@@ -370,8 +403,26 @@ export function mergeProject(cur: Agent[], s: Scan, kids: Agent[], live: Map<str
 // thread forked and never started). They are not agents, so they are not shown.
 export const ranNothing = (r: { model?: string; tokIn: number; tokOut: number }) => (!r.model || r.model === '?') && !r.tokIn && !r.tokOut
 
+// The share of a journal's output spent thinking. Both families count thinking as a part of the output, so it is at
+// most the whole, and it is held there: a glyph bar cannot draw more. Absent where the journal records no count.
+export const thinkShare = (r: { reasoning?: number; tokOut: number }) =>
+  typeof r.reasoning === 'number' && r.tokOut > 0 ? Math.min(1, r.reasoning / r.tokOut) : undefined
+
+// This session's own Claude rows count their tokens through the hooks, which carry no thinking count: it comes from
+// their journals in the shared scan (`recs`), as a share of the output the same journal counts, so it holds however
+// late the mod loaded. A journal gone quiet past the scan's window leaves the last reading.
+export function withThinking(cur: Agent[], recs: { path: string; reasoning?: number; tokOut: number }[], me: string): Agent[] {
+  return cur.map(a => {
+    if (a.family !== 'claude' || scanned(a)) return a
+    const tail = a.id === 'main' ? `/${me}.jsonl` : `/${me}/subagents/agent-${a.id}.jsonl`
+    const r = recs.find(x => x.path.endsWith(tail))
+    const share = r ? thinkShare(r) : undefined
+    return r && share !== undefined ? { ...a, stats: { ...a.stats, reasoning: r.reasoning, thinkShare: share } } : a
+  })
+}
+
 const statsOf = (r: Rec): Stats => ({
-  requests: r.requests, turns: r.turns, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, reasoning: r.reasoning, ctx: r.ctx,
+  requests: r.requests, turns: r.turns, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, reasoning: r.reasoning, thinkShare: thinkShare(r), ctx: r.ctx,
   ctxWindow: r.ctxWindow, limitPct: r.limitPct, limitWindow: r.limitWindow, branch: r.branch, tools: r.tools, series: r.series,
   lastAt: r.mtime,
 })
@@ -402,11 +453,11 @@ export function pastShells(list: Shell[], past: Past): Shell[] {
 // ponytail: a Monitor whose command exits early still reads as running until its deadline; nothing tells of the exit.
 export const shellNow = (s: Shell, now: number): Shell => (s.until && !ENDED.has(s.status) && now > s.until ? { ...s, status: 'completed', t1: s.until } : s)
 
-function recToCodex(r: Rec, now: number): Agent {
+function recToCodex(r: Rec, now: number, s: Pick<Scan, 'repos'>): Agent {
   const t0 = r.t0 ? Date.parse(r.t0) : r.mtime
   const st = codexStatus(r, now)
   return {
-    id: r.path, project: projectOf(r.cwd), title: r.title || (r.kind === 'guardian_review' ? t.autoReview : projectOf(r.cwd)), model: r.model ?? '?',
+    id: r.path, project: projectIn(s, r.cwd), title: r.title || (r.kind === 'guardian_review' ? t.autoReview : projectOf(r.cwd)), model: r.model ?? '?',
     family: 'codex', effort: r.effort, tokIn: r.tokIn, tokOut: r.tokOut, t0, t1: st === 'running' ? undefined : r.mtime,
     cwd: r.cwd, sid: r.id, journal: r.path,
     stats: statsOf(r), status: st, how: r.parent ? (r.kind === 'guardian_review' ? t.codexReview : t.codexSub) : HOW[r.originator ?? ''] ?? r.originator ?? 'codex', rollout: r.path,
@@ -417,7 +468,7 @@ function recToCodex(r: Rec, now: number): Agent {
 export const openUrl = (id: string, kind: 'code' | 'work') =>
   `claude://code/${kind === 'code' ? 'continue' : 'needs-input'}?session=${encodeURIComponent(id)}&source=agent-radar`
 
-function claudeRow(r: Rec, now: number): Agent {
+function claudeRow(r: Rec, now: number, s: Pick<Scan, 'repos'>): Agent {
   const sub = r.path.includes('/subagents/')
   const fresh = now - r.mtime < 60e3
   // A subagent sits under its session, or under the agent that spawned it when nested: that agent's journal lies in
@@ -425,7 +476,7 @@ function claudeRow(r: Rec, now: number): Agent {
   const home = r.path.split('/subagents/')[0]!
   const up = r.meta?.parentAgentId ? `${home}/subagents/agent-${r.meta.parentAgentId}.jsonl` : home + '.jsonl'
   return {
-    id: r.path, parentId: sub ? up : undefined, project: projectOf(r.cwd),
+    id: r.path, parentId: sub ? up : undefined, project: projectIn(s, r.cwd),
     title: r.meta?.description ?? r.title ?? projectOf(r.cwd), model: (r.model ?? '?').replace(/^claude-/, ''),
     family: 'claude', effort: r.effort, tokIn: r.tokIn, tokOut: r.tokOut, t0: r.t0 ? Date.parse(r.t0) : r.mtime,
     t1: fresh ? undefined : r.mtime, status: fresh ? 'running' : 'idle', stats: statsOf(r),
@@ -436,10 +487,10 @@ function claudeRow(r: Rec, now: number): Agent {
 }
 
 // The Claude journals as rows: a Desktop session started from another one sits under it, when that one is listed too.
-function claudeRows(recs: Rec[], now: number): Agent[] {
+function claudeRows(recs: Rec[], now: number, s: Pick<Scan, 'repos'>): Agent[] {
   const bySid = new Map(recs.map(r => [r.path.split('/').pop()!.replace('.jsonl', ''), r.path]))
   return recs.map(r => {
-    const row = claudeRow(r, now)
+    const row = claudeRow(r, now, s)
     const up = r.desktop?.parent && bySid.get(r.desktop.parent)
     return up && !row.parentId ? { ...row, parentId: up } : row
   })
@@ -447,20 +498,20 @@ function claudeRows(recs: Rec[], now: number): Agent[] {
 // The Codex rollouts as rows: a child thread under its parent thread, a run under the journal row (among `claude`)
 // whose Bash call launched it, titled as that call was. A launch stays even before its first turn: it is the run
 // that was just started.
-function codexRows(recs: Rec[], claude: Agent[], now: number): Agent[] {
+function codexRows(recs: Rec[], claude: Agent[], now: number, s: Pick<Scan, 'repos'>): Agent[] {
   const byThread = new Map(recs.map(r => [r.id, r.path]))
   return recs.filter(r => r.launch || !ranNothing(r)).map(r => {
-    const row = recToCodex(r, now)
+    const row = recToCodex(r, now, s)
     const l = r.launch
     const up = r.parent && byThread.get(r.parent)
-    if (up) return { ...row, parentId: up, project: projectOf(recs.find(c => c.path === up)?.cwd ?? r.cwd) }
+    if (up) return { ...row, parentId: up, project: projectIn(s, recs.find(c => c.path === up)?.cwd ?? r.cwd) }
     const parent = claude.find(c => c.id === l?.path)
     return l ? { ...row, project: parent?.project ?? row.project, parentId: l.path, title: l.title || row.title, how: l.bg ? 'codex exec · ' + t.bg : 'codex exec', cmd: l.cmd } : row
   })
 }
 export function fromScan(s: Scan, now: number): Agent[] {
-  const claude = claudeRows(s.claude, now)
-  return [...claude, ...codexRows(s.codex, claude, now)]
+  const claude = claudeRows(s.claude, now, s)
+  return [...claude, ...codexRows(s.codex, claude, now, s)]
 }
 
 // Every chat draws from one machine-wide scan in the shared store, so its cost does not grow with the chats. No chat
@@ -540,7 +591,9 @@ const APPS: Record<string, { color: string; mark?: string }> = {
 }
 const markOf = (a: Agent) => ICONS[APPS[a.how]?.mark ?? a.family]!
 // `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
-const W = { model: 11, modelShort: 9, cmodel: 11, eff: 6, effShort: 2, tok: 6, bar: 5, ctx: 5, time: 6, how: 16, field: 16 }
+// The narrowest title a one-line row keeps: past it TIME goes, and past that again the list turns into cards.
+const MIN_TITLE = 12
+const W = { model: 11, modelShort: 5, cmodel: 11, eff: 6, effShort: 2, tok: 6, bar: 5, ctx: 5, thk: 5, time: 6, how: 16, field: 16 }
 
 
 // The pane opens with this session's details showing, as if its row had been pressed.
@@ -695,7 +748,7 @@ export const register: Register = (on, options) => {
     if (bg) await update($, shells, l => trimShells([...l, { id: sid, cmd, title: e.description, t0: Date.now(), status: 'running', kind: kindOf(cmd) }]))
     const p = parseCodex(cmd)
     if (codex) await upsert($, id, {}, {
-      id, parentId: e.agentId ?? 'main', project: projectOf(root), title: e.description || p.prompt || 'codex exec',
+      id, parentId: e.agentId ?? 'main', project: here || projectOf(root), title: e.description || p.prompt || 'codex exec',
       model: p.model ?? 'codex', family: 'codex', effort: p.effort, tokIn: 0, tokOut: 0, t0: Date.now(),
       status: 'running', how: bg ? 'codex exec · ' + t.bg : 'codex exec', cmd, cwd: root,
     })
@@ -773,16 +826,25 @@ export const register: Register = (on, options) => {
     }
     const cols = e.props.bodyColumns ?? 100
     const web = e.surface !== 'terminal'
-    // Narrowing steps: the launch column goes first, then effort shrinks to one square under a short header, and only
-    // then do rows become two-line cards.
-    const compact = cols < 56, tight = cols < 88, showHow = cols >= 96, showEff = true
-    const effW = tight ? W.effShort : W.eff, modelW = tight ? W.modelShort : W.model
+    // A desktop draws the headers in a proportional font, where Cyrillic capitals run about a tenth wider than a cell:
+    // a column under such a label takes the cells it needs, so УСИЛИЕ, МЫШЛ. and ВРЕМЯ are never cut.
+    const headW = (label: string, w: number) => (web && /[А-ЯЁ]/.test(label) ? Math.max(w, Math.ceil(label.length * 1.1)) : w)
+    const effShortW = headW(t.head.effortShort, W.effShort), effLongW = headW(t.head.effort, W.eff)
+    const ctxW = headW(t.head.ctx, W.ctx), thkW = headW(t.head.thk, W.thk)
+    // Narrowing steps: the launch column goes first, then effort shrinks to a two-character code under a short header
+    // and models to their short names, then TIME goes, and only then do rows become two-line cards. TIME goes when the
+    // narrowed row's fixed cells (padding, dot, model, effort, tokens, context, thinking, time and the seven gaps) leave
+    // the title fewer than MIN_TITLE cells; cards come when the same row without TIME and its gap does.
+    const narrowRow = 2 + 2 + W.modelShort + effShortW + (web ? W.bar : 4 + 1 + W.bar) + ctxW + thkW + W.time + 7
+    const showTime = cols >= narrowRow + MIN_TITLE
+    const compact = cols < narrowRow - W.time - 1 + MIN_TITLE, tight = cols < 88, showHow = cols >= 96, showEff = true
+    const effW = tight ? effShortW : effLongW, modelW = tight ? W.modelShort : W.model
     // Token column: count over a bar (desktop), count beside a bar (terminal); narrowed with the effort column.
     const barW = web ? (tight ? W.bar : W.bar + 2) : W.bar, numW = tight ? 4 : W.tok
     const fmtTok = tight ? fmtKShort : fmtK
     // A card's second line still has room for the five-square effort meter down to this width: padding, dot, model,
-    // meter, tokens, context, their gaps and a few cells of tree indent.
-    const cardEffLong = cols >= 2 + 2 + W.cmodel + W.eff + barW + W.ctx + 5 + 6
+    // meter, tokens, context, thinking, their gaps and a few cells of tree indent.
+    const cardEffLong = cols >= 2 + 2 + W.cmodel + effLongW + barW + ctxW + thkW + 6 + 6
     const setView = (p: Partial<View>) => update($, viewA, v => ({ ...v, ...p }))
     const running = list.filter(a => a.status === 'running').length
     const nCodex = list.filter(a => a.family === 'codex').length
@@ -799,6 +861,11 @@ export const register: Register = (on, options) => {
     const shownIds = new Set(shown.map(a => a.id))
     const left = listed.filter(a => !shownIds.has(a.id)).length
     const maxTok = Math.max(1, ...shown.map(a => a.tokIn + a.tokOut))
+    // TIME is as wide as its header or the longest time shown, up to the room "21h30m" needs, so a list of minutes keeps
+    // no empty cells beside THKG; centered there on graphical surfaces, as the columns before it are. The narrowing
+    // above counts its widest, so a growing time never moves the list to another step.
+    const timeW = Math.min(W.time, Math.max(headW(t.head.time, t.head.time.length), ...shown.map(a => fmtT((a.t1 ?? now) - a.t0).length)))
+    const timeAlign = web ? 'center' : 'flex-end'
     // 'main' stands for this session: in "All" it is the scanned row carrying this session's id.
     const selId = view.sel === 'main' && view.scope === 'all' ? shown.find(a => a.family === 'claude' && a.sid === meSid)?.id : view.sel
     const sel = shown.find(a => a.id === selId)
@@ -813,11 +880,12 @@ export const register: Register = (on, options) => {
       <Box key="head" flexDirection="row" gap={1} paddingX={1} width="100%">
         <Box width={2} flexShrink={0}><Text> </Text></Box>
         <Box flexGrow={1} flexShrink={1} minWidth={0}><Text dimColor bold>{t.head.task}</Text></Box>
-        <Box width={modelW} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.model}</Text></Box>
+        <Box width={modelW} flexShrink={0} overflow="hidden"><Text dimColor bold>{tight ? t.head.modelShort : t.head.model}</Text></Box>
         {showEff && <Box width={effW} flexShrink={0} overflow="hidden"><Text dimColor bold>{tight ? t.head.effortShort : t.head.effort}</Text></Box>}
         <Box width={web ? barW : numW + 1 + barW} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{tight ? t.head.tokensShort : t.head.tokens}</Text></Box>
-        <Box width={W.ctx} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{t.head.ctx}</Text></Box>
-        <Box width={W.time} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text dimColor bold>{t.head.time}</Text></Box>
+        <Box width={ctxW} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{t.head.ctx}</Text></Box>
+        <Box width={thkW} flexShrink={0} overflow="hidden" justifyContent={web ? 'center' : 'flex-end'}><Text dimColor bold>{t.head.thk}</Text></Box>
+        {showTime && <Box width={timeW} flexShrink={0} overflow="hidden" justifyContent={timeAlign}><Text dimColor bold>{t.head.time}</Text></Box>}
         {showHow && <Box width={W.how} flexShrink={0} overflow="hidden"><Text dimColor bold>{t.head.how}</Text></Box>}
       </Box>
     )
@@ -825,26 +893,29 @@ export const register: Register = (on, options) => {
     // A 3 px bar stretched across its cell, so the number above sits close and the row stays one line plus a hair.
     const thinBar = (share: number, color: string, alt = Math.round(share * 100) + '%') =>
       Svg && <Svg source={meter(share, color, 360, 4).replace('<svg ', '<svg preserveAspectRatio="none" ')} alt={alt} height={3} />
-    // Share of the context window in use: the percent over a bar, colored by how full it is.
-    const ctxCell = (a: Agent) => {
-      const s = ctxOf(a)
+    // A share as the CTX column draws it: the percent over a bar, colored by `colorOf`; a dash where there is none.
+    const pctCell = (key: string, w: number, s: number | undefined, colorOf: (s: number) => string) => {
       const pct = s === undefined ? '—' : Math.round(s * 100) + '%'
-      const color = s === undefined ? C.muted : ctxColor(s)
-      const fill = s === undefined ? 0 : Math.max(1, Math.round(s * W.ctx))
+      const color = s === undefined ? C.muted : colorOf(s)
+      const fill = s ? Math.max(1, Math.round(s * w)) : 0
       return web ? (
-        <Box key={'x' + a.id.slice(-40)} width={W.ctx} flexShrink={0} flexDirection="column" alignItems="center">
+        <Box key={key} width={w} flexShrink={0} flexDirection="column" alignItems="center">
           <Text mono size="footnote" color={color}>{pct}</Text>
           {Svg
-            ? <Box width={W.ctx} flexShrink={0}>{thinBar(s ?? 0, color!, pct)}</Box>
-            : <Box width={W.ctx} flexShrink={0} overflow="hidden">
+            ? <Box width={w} flexShrink={0}>{thinBar(s ?? 0, color!, pct)}</Box>
+            : <Box width={w} flexShrink={0} overflow="hidden">
                 <Text mono color={color}>{'━'.repeat(fill)}</Text>
-                <Text mono color={C.muted} dimColor>{'━'.repeat(W.ctx - fill)}</Text>
+                <Text mono color={C.muted} dimColor>{'━'.repeat(w - fill)}</Text>
               </Box>}
         </Box>
       ) : (
-        <Box key={'x' + a.id.slice(-40)} width={W.ctx} flexShrink={0} justifyContent="flex-end"><Text color={color}>{pct}</Text></Box>
+        <Box key={key} width={w} flexShrink={0} justifyContent="flex-end"><Text color={color}>{pct}</Text></Box>
       )
     }
+    // Share of the context window in use, colored by how full it is.
+    const ctxCell = (a: Agent) => pctCell('x' + a.id.slice(-40), ctxW, ctxOf(a), ctxColor)
+    // Share of the output spent thinking, in pinks of its own, where the journal counts it.
+    const thinkCell = (a: Agent) => pctCell('h' + a.id.slice(-40), thkW, a.stats?.thinkShare, thinkColor)
     // Tokens spent: the count in small type over a bar scaled to the busiest agent shown (desktop); count and bar side by side (terminal).
     const tokCell = (a: Agent) => {
       const t = a.tokIn + a.tokOut
@@ -870,19 +941,32 @@ export const register: Register = (on, options) => {
       )
     }
     // Effort as five squares, the filled ones all in the level's color: low one white, medium two yellow, high three
-    // green, xhigh four blue, max five purple.
+    // green, xhigh four blue, max five purple; ultra fills all five in its rose.
     const effText = (effort?: string) => {
-      const n = EFF.indexOf(effort ?? '') + 1
+      const i = effIndex(effort)
+      const n = Math.min(5, i + 1)
       return (
         <Text mono={web || undefined}>
-          <Text color={n ? EFF_COLOR[n - 1] : C.muted}>{n ? '■'.repeat(n) : '—'}</Text>
+          <Text color={n ? EFF_COLOR[i] : C.muted}>{n ? '■'.repeat(n) : '—'}</Text>
           <Text color={C.muted}>{n ? '□'.repeat(5 - n) : ''}</Text>
         </Text>
       )
     }
-    // One large square in the level's color instead of five, for a pane too narrow for the full meter.
-    const effCube = (effort?: string) => (
-      <Text size="heading" color={EFF_COLOR[EFF.indexOf(effort ?? '')] ?? C.muted}>{effort ? '■' : '—'}</Text>
+    // The wide effort cell: the level's name in its color over the squares, as CTX writes its percent over its bar; a
+    // level not known here by its own word, in gray. The terminal's one-line rows keep the squares alone.
+    const effLong = (effort?: string) => {
+      if (!web) return effText(effort)
+      const i = effIndex(effort)
+      return (
+        <Box flexDirection="column" alignItems="center">
+          {!!effort && <Text mono size="footnote" color={EFF_COLOR[i] ?? C.muted}>{EFF_NAME[i] ?? effort}</Text>}
+          {effText(effort)}
+        </Box>
+      )
+    }
+    // A bold two-character code in the level's color instead of five squares, for a pane too narrow for the full meter.
+    const effShort = (effort?: string) => (
+      <Text bold mono={web || undefined} color={EFF_COLOR[effIndex(effort)] ?? C.muted}>{effCode(effort)}</Text>
     )
     // A project's agents as one low pill per family next to its name (left out when the family has none there):
     // a square per agent, running in the family's color, the rest gray. When the squares would not fit on the
@@ -953,16 +1037,17 @@ export const register: Register = (on, options) => {
             {a.open && <Box flexShrink={0}>{openBtn(a)}</Box>}
           </Box>
           <Box width={modelW} flexShrink={0} overflow="hidden">
-            <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (modelLabel(a.model) || '…') + ' '}</Text>
+            <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + ((tight ? modelShort : modelLabel)(a.model) || '…') + ' '}</Text>
           </Box>
           {showEff && (
             <Box width={effW} flexShrink={0} overflow="hidden">
-              {tight ? effCube(a.effort) : effText(a.effort)}
+              {tight ? effShort(a.effort) : effLong(a.effort)}
             </Box>
           )}
           {tokCell(a)}
           {ctxCell(a)}
-          <Box width={W.time} flexShrink={0} overflow="hidden" justifyContent="flex-end"><Text mono={web || undefined} dimColor={!!a.t1}>{fmtT((a.t1 ?? now) - a.t0)}</Text></Box>
+          {thinkCell(a)}
+          {showTime && <Box width={timeW} flexShrink={0} overflow="hidden" justifyContent={timeAlign}><Text mono={web || undefined} dimColor={!!a.t1}>{fmtT((a.t1 ?? now) - a.t0)}</Text></Box>}
           {showHow && <Box width={W.how} flexShrink={0} overflow="hidden">{howCell(a)}</Box>}
         </Box>
       )
@@ -1019,7 +1104,7 @@ export const register: Register = (on, options) => {
                 {icon && <Svg source={icon} alt={a.how} width={16} height={16} />}
               </Box>
             )}
-            <Box width={W.time} flexShrink={0} justifyContent="flex-end"><Text mono={web || undefined} dimColor={!!a.t1}>{fmtT((a.t1 ?? now) - a.t0)}</Text></Box>
+            <Box width={timeW} flexShrink={0} justifyContent="flex-end"><Text mono={web || undefined} dimColor={!!a.t1}>{fmtT((a.t1 ?? now) - a.t0)}</Text></Box>
           </Box>
           {/* Second line: the same fixed cells on every card, so models, effort and tokens line up down the list. */}
           <Box flexDirection="row" gap={1} width="100%">
@@ -1029,10 +1114,11 @@ export const register: Register = (on, options) => {
               <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (modelLabel(a.model) || '…') + ' '}</Text>
             </Box>
             {cardEffLong
-              ? <Box width={W.eff} flexShrink={0} alignItems="center">{effText(a.effort)}</Box>
-              : <Box width={2} flexShrink={0} alignItems="center">{effCube(a.effort)}</Box>}
+              ? <Box width={effLongW} flexShrink={0} alignItems="center">{effLong(a.effort)}</Box>
+              : <Box width={2} flexShrink={0} alignItems="center">{effShort(a.effort)}</Box>}
             {tokCell(a)}
             {ctxCell(a)}
+            {thinkCell(a)}
             <Box flexGrow={1} flexShrink={1} minWidth={0}>{icon
               ? <Text color={app!.color} wrap="truncate-end">{mechanism(a.how)}</Text>
               : howCell(a)}</Box>
@@ -1194,7 +1280,7 @@ export const register: Register = (on, options) => {
       const fam = C[sel.family]!
       const cr = st.cacheRead ?? 0, cw = st.cacheWrite ?? 0
       const fresh = Math.max(0, sel.tokIn - cr - cw)
-      const n = EFF.indexOf(sel.effort ?? '') + 1
+      const n = effIndex(sel.effort) + 1
       const ctxShare = ctxOf(sel)
       const win = st.ctxWindow ?? (sel.family === 'claude' ? claudeWindow : 0)
       return (
@@ -1229,8 +1315,18 @@ export const register: Register = (on, options) => {
             {chart(stackBar([
               { v: fresh, color: C.fresh! }, { v: cr, color: C.cache! }, { v: cw, color: C.waiting! }, { v: sel.tokOut, color: fam },
             ]), t.breakdown)}
-            {legend([[t.legend.fresh, fresh, C.fresh!], [t.legend.cacheRead, cr, C.cache!], [t.legend.cacheWrite, cw, C.waiting!], [t.legend.out, sel.tokOut, fam], [t.legend.reasoning, st.reasoning, C.muted!]])}
+            {legend([[t.legend.fresh, fresh, C.fresh!], [t.legend.cacheRead, cr, C.cache!], [t.legend.cacheWrite, cw, C.waiting!], [t.legend.out, sel.tokOut, fam]])}
           </Box>
+          {/* How much of the output went to thinking: the models whose journals count it apart, Claude and Codex both. */}
+          {st.thinkShare !== undefined && (
+            <Box flexDirection="column">
+              <Text>
+                <Text dimColor>{t.thinking}</Text><Text bold>{fmtK(st.reasoning ?? 0)}</Text>
+                <Text dimColor>{' · '}<Text color={thinkColor(st.thinkShare)} bold>{Math.round(st.thinkShare * 100) + '%'}</Text>{t.ofOutput}</Text>
+              </Text>
+              {chart(meter(st.thinkShare, thinkColor(st.thinkShare)), t.thinkAlt, st.thinkShare, thinkColor(st.thinkShare))}
+            </Box>
+          )}
           {st.ctx !== undefined && (
             <Box flexDirection="column">
               <Text>
@@ -1328,6 +1424,14 @@ export const register: Register = (on, options) => {
         </Button>
       </Box>
     )
+    // The token sums join the counters' line only where they fit on it whole. Counted in cells: the panel's frame and
+    // paddings, the dot and its label, each family's name and its count in a Button's frame (`[ ]` on the terminal,
+    // a little narrower on a desktop), the gaps between.
+    const counter = (name: string, n: number) => 1 + name.length + 1 + 4 + ('☑ ' + n).length
+    const countersW = 6 + 2 + t.runningN(running).length + counter('Claude', list.length - nCodex) + counter('Codex', nCodex)
+    const sumIO = `${t.sumIn} ${fmtK(tokIn)}  ${t.sumOut} ${fmtK(tokOut)}  `, sumTotal = `${t.sumTotal} ${fmtK(tok)}`
+    const showTotal = countersW + 1 + sumTotal.length <= cols
+    const showIO = !tight && countersW + 1 + sumIO.length + sumTotal.length <= cols
     return (
       <Box flexDirection="column" gap={1}>
         {/* The switches sit on one full-width panel, set apart from the list of sessions under it: a tint on graphical
@@ -1364,11 +1468,11 @@ export const register: Register = (on, options) => {
             </Box>
             {family('claude', 'Claude', list.length - nCodex)}
             {family('codex', 'Codex', nCodex)}
-            {/* Token sums by width: in, out and total on a wide pane, the total alone as it narrows, nothing on a
-                narrow one rather than a line of its own. */}
-            {!compact && (
+            {/* Token sums by width: in, out and total on a wide pane, the total alone as it narrows, and nothing once
+                even that would not fit beside the counters, rather than a line of its own. */}
+            {showTotal && (
               <Text>
-                {!tight && <Text><Text dimColor>{t.sumIn + ' '}</Text>{fmtK(tokIn) + '  '}<Text dimColor>{t.sumOut + ' '}</Text>{fmtK(tokOut) + '  '}</Text>}
+                {showIO && <Text><Text dimColor>{t.sumIn + ' '}</Text>{fmtK(tokIn) + '  '}<Text dimColor>{t.sumOut + ' '}</Text>{fmtK(tokOut) + '  '}</Text>}
                 <Text dimColor>{t.sumTotal + ' '}</Text>{fmtK(tok)}
               </Text>
             )}

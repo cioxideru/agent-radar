@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, sparkline, stackBar } from '../hooks/charts'
 
 import type { Agent, Shell } from '../types'
-import { asq, ctxColor, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, ordered, ownScan, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, trimShells } from '../hooks/register'
+import { asq, ctxColor, effCode, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, modelShort, ordered, ownScan, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, thinkColor, thinkShare, trimShells, withThinking } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -18,6 +18,15 @@ test('maps worktrees to their project', () => {
   expect(projectOf('C:\\dev\\orbit-shop\\.codex\\worktrees\\x')).toBe('orbit-shop')
   expect(modelLabel('codex-auto-review')).toBe('auto-review')
   expect(modelLabel('opus-5-5')).toBe('opus-5-5')
+  expect(modelShort('fable-5-2')).toBe('F52')
+  expect(modelShort('opus-5-5')).toBe('O55')
+  expect(modelShort('gpt-6-astra')).toBe('60A')
+  expect(modelShort('gpt-6.1-sol')).toBe('61S')
+  expect(modelShort('haiku-4-5-20251001')).toBe('H45')
+  expect(modelShort('codex-auto-review')).toBe('AR')
+  expect(modelShort('o4-mini')).toBe('O4M')
+  expect(modelShort('codex')).toBe('codex')
+  expect(modelShort('o3')).toBe('o3')
   expect(mechanism('codex exec · bg')).toBe('exec · bg')
   expect(mechanism('Claude Code CLI')).toBe('CLI')
   expect(mechanism('Agent · Explore')).toBe('Agent · Explore')
@@ -54,6 +63,43 @@ test('draws tree guides and nests a codex run under the session that launched it
   expect(rows.find(r => r.title === 'Review A')!.how).toBe('codex exec · bg')
 })
 
+test('a worktree the scan knows groups under its repository, its folder still the title', () => {
+  const now = Date.parse('2026-10-16T12:00:00Z')
+  const rows = fromScan({
+    claude: [{ path: '/p/s.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/wt/feat' }],
+    codex: [{ path: '/c/r.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/wt/feat', originator: 'codex_exec', model: 'gpt-6-astra' }],
+    repos: { '/x/wt/feat': '/x/Proj' },
+  }, now)
+  expect(rows.map(r => r.project)).toEqual(['Proj', 'Proj'])
+  expect(rows.find(r => r.family === 'claude')!.title).toBe('feat')
+})
+
+test("the thinking share is of the output its own journal counts, for this session's hook rows too", () => {
+  const now = Date.parse('2026-10-16T12:00:00Z')
+  const rows = fromScan({
+    claude: [
+      { path: '/p/s.jsonl', mtime: now, tokIn: 9, tokOut: 200, reasoning: 50, cwd: '/x/Proj' },
+      { path: '/p/old.jsonl', mtime: now, tokIn: 9, tokOut: 200, cwd: '/x/Proj' },
+    ],
+    codex: [{ path: '/c/r.jsonl', mtime: now, tokIn: 7, tokOut: 40, reasoning: 30, cwd: '/x/Proj', originator: 'codex_exec', model: 'gpt-6-astra' }],
+  }, now)
+  expect(rows.map(r => r.stats?.thinkShare)).toEqual([0.25, undefined, 0.75])
+  expect(thinkShare({ reasoning: 9, tokOut: 0 })).toBeUndefined()
+  expect(thinkShare({ reasoning: 12, tokOut: 10 })).toBe(1)
+  // The hooks counted 7 output tokens since the mod loaded; the share is the journal's, of the output it counts.
+  const main: Agent = { id: 'main', project: 'Proj', title: 'Main session', model: 'opus-5-5', family: 'claude', tokIn: 1, tokOut: 7, t0: now, status: 'running', how: 'Claude Code session', stats: { ctx: 10 } }
+  const sub: Agent = { ...main, id: 'a1', parentId: 'main', title: 'Audit', stats: undefined }
+  const quiet: Agent = { ...main, id: 'a2', parentId: 'main', title: 'Quiet', stats: { reasoning: 1, thinkShare: 0.5 } }
+  const child: Agent = { ...main, id: '/p/k.jsonl', journal: '/p/k.jsonl', title: 'Child' }
+  const out = withThinking([main, sub, quiet, child], [
+    { path: '/h/.claude/projects/-x-Proj/S1.jsonl', tokOut: 400, reasoning: 100 },
+    { path: '/h/.claude/projects/-x-Proj/S1/subagents/agent-a1.jsonl', tokOut: 10, reasoning: 4 },
+    { path: '/p/k.jsonl', tokOut: 10, reasoning: 10 },
+  ], 'S1')
+  expect(out.map(a => a.stats?.thinkShare)).toEqual([0.25, 0.4, 0.5, undefined])
+  expect(out[0]!.stats).toEqual({ ctx: 10, reasoning: 100, thinkShare: 0.25 })
+})
+
 test('nests a codex subagent under its parent thread and shortens times', () => {
   const now = Date.parse('2026-10-16T12:00:00Z')
   const rows = fromScan({ claude: [], codex: [
@@ -80,6 +126,9 @@ test('charts draw sized SVG documents', () => {
 
 test('context colors follow the fill thresholds and handoff links carry folder and journal', () => {
   expect([0.3, 0.6, 0.8, 0.95].map(ctxColor)).toEqual(['#3fcf7f', '#5aa9e6', '#e8b23a', '#f06a5f'])
+  // Thinking has pinks of its own, none of them a context color.
+  expect([0.1, 0.3, 0.6, 0.8].map(thinkColor)).toEqual(['#f9a8d4', '#f472b6', '#e879f9', '#c026d3'])
+  expect(['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'ultracode', 'minimal', undefined].map(effCode)).toEqual(['Lw', 'Md', 'Hi', 'xH', 'Mx', 'U', 'U', '?', '—'])
   const url = new URL(handoffUrl('/x/My Proj', 'Task', '/j/s.jsonl'))
   expect(url.protocol + url.host + url.pathname).toBe('claude:code/new')
   expect(url.searchParams.get('folder')).toBe('/x/My Proj')

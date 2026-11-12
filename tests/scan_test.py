@@ -1,6 +1,6 @@
 """Self-check of scan.py on fictional journals in a temporary home: quiet parents are read for their active children
 (a session for its subagent, an agent for a nested one, a Codex thread for its child), a chat Remote Control holds
-open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, every live session's Desktop title comes with the scan of all, a session's own scan finds what it started, a Desktop record unchanged is not read again, and a thread's name is its last. Run: python3 -I tests/scan_test.py"""
+open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, every live session's Desktop title comes with the scan of all, a session's own scan finds what it started, a Desktop record unchanged is not read again, a thread's name is its last, a git worktree anywhere names its repository, and a session's thinking tokens are summed where its replies count them. Run: python3 -I tests/scan_test.py"""
 import json, os, subprocess, sys, tempfile, time, datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,8 +15,8 @@ def write(path, lines, mtime):
     os.utime(path, (mtime, mtime))
 
 
-def scan(home, *args, stdin='{}'):
-    r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'scan.py'), *args], input=stdin, capture_output=True, text=True, env={**os.environ, 'HOME': home})
+def scan(home, *args, stdin='{}', cwd=None):
+    r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'scan.py'), *args], input=stdin, capture_output=True, text=True, env={**os.environ, 'HOME': home}, cwd=cwd)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -53,6 +53,13 @@ with tempfile.TemporaryDirectory() as home:
     assert paths['S1.jsonl']['cwd'] == '/x/Proj' and paths['S1.jsonl']['t0'] == iso(OLD - 60)
     assert paths['agent-a2.jsonl']['meta']['parentAgentId'] == 'a1'
     assert {r['id'] for r in out['codex']} == {'T1', 'T2'}, out['codex']
+    assert 'reasoning' not in paths['S1.jsonl'], paths['S1.jsonl']
+
+    # Thinking tokens: summed over the replies that count them, a reply with no count adding nothing.
+    thought = lambda mid, out, th: dict(reply, timestamp=iso(FRESH), message=dict(reply['message'], id=mid, usage={'input_tokens': 10, 'output_tokens': out, 'output_tokens_details': {'thinking_tokens': th}}))
+    write(P + 'S3.jsonl', [user, thought('m2', 40, 30), thought('m3', 20, 5), thought('m4', 9, None), dict(reply, message=dict(reply['message'], id='m5'))], FRESH)
+    s3 = next(r for r in scan(home, 'all', '15')['claude'] if r['path'].endswith('/S3.jsonl'))
+    assert s3['reasoning'] == 35 and s3['tokOut'] == 74, s3
 
     # A chat Remote Control holds open: listed while quiet, titled from beside its journal, and only while alive.
     # A Desktop chat with Remote Control on, and a record whose process is gone, stay out.
@@ -125,4 +132,14 @@ with tempfile.TemporaryDirectory() as home:
     with open(home + '/.codex/session_index.jsonl', 'w') as f:
         f.write('{"id":"T1","thread_name":"Old"}\nnot json\n{"id":"T2","thread_name":"Other"}\n{"id":"T1","thread_name":"New"}')
     assert {r['id']: r['title'] for r in scan(home, 'all', '15')['codex']} == {'T1': 'New', 'T2': 'Other'}
+
+    # A worktree outside .claude/worktrees belongs to its repository, found from a folder inside it; a plain repository
+    # and a folder in no repository are their own projects.
+    W = os.path.realpath(home) + '/work'  # the folder Python finds itself in, /private/var on macOS
+    os.makedirs(home + '/work/Repo/.git/worktrees/feat')
+    os.makedirs(home + '/work/wt/feat/src')
+    open(home + '/work/wt/feat/.git', 'w').write('gitdir: ../../Repo/.git/worktrees/feat\n')
+    assert scan(home, 'only', '15', cwd=home + '/work/wt/feat/src')['repos'] == {W + '/wt/feat/src': W + '/Repo'}
+    assert scan(home, 'only', '15', cwd=home + '/work/Repo')['repos'] == {}
+    assert scan(home, 'only', '15', cwd=home + '/work')['repos'] == {}
     print('scan.py: ok')

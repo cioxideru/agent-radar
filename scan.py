@@ -153,6 +153,10 @@ def claude(p, mt):
     r['tokOut'] = sum(u.get('output_tokens', 0) for u in usage.values())
     r['cacheRead'] = sum(u.get('cache_read_input_tokens', 0) for u in usage.values())
     r['cacheWrite'] = sum(u.get('cache_creation_input_tokens', 0) for u in usage.values())
+    # Thinking, a part of the output, where the API counts it apart: older journals and synthetic replies have no count.
+    think = [d.get('thinking_tokens') for u in usage.values() for d in [u.get('output_tokens_details')] if isinstance(d, dict)]
+    if any(isinstance(n, int) for n in think):
+        r['reasoning'] = sum(n for n in think if isinstance(n, int))
     if usage:
         last = usage[max(usage, key=lambda k: when.get(k) or 0)]
         r['ctx'] = last.get('input_tokens', 0) + last.get('cache_read_input_tokens', 0) + last.get('cache_creation_input_tokens', 0)
@@ -189,6 +193,24 @@ def alive(pid):
     except (OSError, TypeError):
         return False
     return True
+
+def repo(cwd):
+    # The repository a git worktree belongs to, wherever the worktree lies: its .git is a file naming
+    # <repo>/.git/worktrees/<name>. A folder with a .git folder of its own, or none above it, is its own project.
+    d = cwd
+    while d and d != H and os.path.dirname(d) != d:
+        g = os.path.join(d, '.git')
+        if os.path.isdir(g):
+            return None
+        if os.path.isfile(g):
+            try:
+                to = open(g, errors='replace').read().strip().partition('gitdir:')[2].strip()
+            except OSError:
+                return None
+            m = re.match(r'(.*)[\\/]\.git[\\/]worktrees[\\/][^\\/]+$', os.path.normpath(os.path.join(d, to)))
+            return m.group(1).replace(os.sep, '/') if m else None
+        d = os.path.dirname(d)
+    return None
 
 def remote(recs):
     # The chats claude remote-control holds open: their journals go quiet between turns, so only the process records
@@ -324,4 +346,8 @@ for r in out['codex']:
     near = [l for l in launches if t and iso(l['ts']) and 0 <= t - iso(l['ts']) <= 120 and r.get('originator') == 'codex_exec']
     if near:
         r['launch'] = max(near, key=lambda l: iso(l['ts']))
+# Each worktree's repository, by the folders listed and this chat's own, so a worktree outside .claude/worktrees and
+# .codex/worktrees groups under its project too; a missing folder is looked up no further.
+dirs = {r.get('cwd') for k in ('codex', 'claude') for r in out[k]} | {os.getcwd().replace(os.sep, '/')}
+out['repos'] = {c: m for c in dirs if c and os.path.isdir(c) for m in [repo(c)] if m}
 print(json.dumps(out))
