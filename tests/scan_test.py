@@ -1,6 +1,6 @@
 """Self-check of scan.py on fictional journals in a temporary home: quiet parents are read for their active children
 (a session for its subagent, an agent for a nested one, a Codex thread for its child), a chat Remote Control holds
-open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, every live session's Desktop title comes with the scan of all, a session's own scan finds what it started, a Desktop record unchanged is not read again, a thread's name is its last, a git worktree anywhere names its repository, a session's thinking tokens are summed where its replies count them, and a load's look back returns each journal read whole. Run: python3 -I tests/scan_test.py"""
+open stays listed while alive, the cache on stdin spares unchanged journals, a user line quoting an assistant line is still a turn, 'only' reads the rollouts it is given and the threads above them and nothing else, every live session's Desktop title comes with the scan of all, a session's own scan finds what it started, a Desktop record unchanged is not read again, a thread's name is its last, a git worktree anywhere names its repository, a session's thinking tokens are summed where its replies count them, a load's look back returns each journal read whole, and a chat another chat's shell started hangs under that chat by their processes, a day past its end too. Run: python3 -I tests/scan_test.py"""
 import json, os, subprocess, sys, tempfile, time, datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -146,4 +146,35 @@ with tempfile.TemporaryDirectory() as home:
     assert scan(home, 'only', '15', cwd=home + '/work/wt/feat/src')['repos'] == {W + '/wt/feat/src': W + '/Repo'}
     assert scan(home, 'only', '15', cwd=home + '/work/Repo')['repos'] == {}
     assert scan(home, 'only', '15', cwd=home + '/work')['repos'] == {}
+
+    # A chat another chat's shell started: its process descends from that chat's, through what ran in the shell. Listed
+    # while its process lives however quiet, its starter with it, at work as its record says; kept under the starter
+    # once it ends, by the links the next scan is given, for a day; and found by the starter's own scan.
+    if sys.platform != 'win32':
+        tree = subprocess.Popen([sys.executable, '-c', 'import subprocess, sys, time; c = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]); print(c.pid, flush=True); time.sleep(60)'],
+                                stdout=subprocess.PIPE, text=True)
+        kid = int(tree.stdout.readline())
+        try:
+            write(P + 'L0.jsonl', [user, reply], OLD)
+            write(P + 'L1.jsonl', [user, reply], OLD)
+            json.dump({'sessionId': 'L0', 'pid': tree.pid, 'hostSessionId': 'local_l0'}, open(home + '/.claude/sessions/5.json', 'w'))
+            json.dump({'sessionId': 'L1', 'pid': kid, 'status': 'busy'}, open(home + '/.claude/sessions/6.json', 'w'))
+            run = scan(home, 'all', '15')
+            rows = {r['path'].split('/')[-1]: r for r in run['claude']}
+            assert (rows['L1.jsonl']['by'], rows['L1.jsonl']['busy']) == ('L0', True), rows.get('L1.jsonl')
+            assert rows['L0.jsonl']['by'] is None and not rows['L0.jsonl']['busy'], sorted(rows)
+            assert list(run['spawned']) == ['L1'] and run['spawned']['L1'][0] == 'L0', run['spawned']
+        finally:
+            tree.kill()
+            tree.wait()
+            os.kill(kid, 9)
+        for f in ('5', '6'):
+            os.remove(home + '/.claude/sessions/' + f + '.json')
+        write(P + 'L1.jsonl', [user, reply], FRESH)
+        after = {r['path'].split('/')[-1]: r for r in scan(home, 'all', '15', stdin=json.dumps({'spawned': run['spawned']}))['claude']}
+        assert (after['L1.jsonl']['by'], after['L1.jsonl']['busy']) == ('L0', False) and 'L0.jsonl' in after, after.get('L1.jsonl')
+        stale = {'L1': ['L0', now - 2 * 86400]}
+        assert next(r for r in scan(home, 'all', '15', stdin=json.dumps({'spawned': stale}))['claude'] if r['path'].endswith('/L1.jsonl'))['by'] is None
+        own = scan(home, 'codex:L0', '5', stdin=json.dumps({'spawned': run['spawned']}))['claude']
+        assert [(r['path'].split('/')[-1], r['by']) for r in own] == [('L1.jsonl', 'L0')], own
     print('scan.py: ok')

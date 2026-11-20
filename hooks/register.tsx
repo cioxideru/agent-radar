@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Shell, Stats, View } from '../types'
-import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, REMOTE_MARK, sparkline, stackBar } from './charts'
+import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, REMOTE_MARK, sparkline, stackBar, TERM_MARK } from './charts'
 import { STRINGS, type Lang, type Strings } from './i18n'
 import { SCAN_PY } from './scan'
 
@@ -10,17 +10,20 @@ type $ = EngineInterface
 // dirs: the folders a new rollout lands in; watch: the folders of Desktop's records; titles: Desktop's title of each
 // live session, by its id; repos: the repository of each listed folder that is a git worktree.
 // records: what Desktop's records say, which the next scan need not read again; it stays with this chat, out of the store.
-type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string>; repos?: Record<string, string>; records?: unknown }
+// spawned: each chat another chat's shell started → [that chat, when last seen alive], kept a day by the scans.
+type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string>; repos?: Record<string, string>; spawned?: Record<string, [string, number]>; records?: unknown }
 // The machine-wide scan both tabs draw from, as it lies in the shared store. `v` tells this shape: a chat still on an
 // older mod writes none, a newer one another number, and each scans for itself rather than read the other's.
 type Shared = { v: number; at: number; mins: number; s: Scan }
-const SCHEMA = 3
+const SCHEMA = 4
 type Rec = {
   path: string; mtime: number; size?: number; tokIn: number; tokOut: number; cwd?: string; t0?: string
   model?: string; effort?: string; title?: string
   originator?: string; started?: number; done?: number
   // A subagent's record beside its journal; `parentAgentId` when another agent spawned it, not the session.
   // live: a chat claude remote-control holds open, listed however long it has been quiet.
+  // by: the chat whose shell started this one (its process descends from that chat's); busy: its process is at work.
+  by?: string | null; busy?: boolean
   entry?: string; live?: boolean; meta?: { description?: string; agentType?: string; requestShape?: string; parentAgentId?: string } | null
   // The `codex exec` calls a Claude journal made: the scanner's own, carried so a cached journal still pairs its runs.
   launches?: unknown[]
@@ -73,7 +76,7 @@ let t: Strings = STRINGS.en
 // Launcher icons: our own drawn marks for Claude and Codex, the same in the rows and the project pills. The apps'
 // icon files blur or turn into a plate at 10-16 px, and drawn marks need no app installed, on any system.
 const MARK: Record<'claude' | 'codex', string> = { claude: CLAUDE_MARK, codex: CODEX_MARK }
-const ICONS: Record<string, string> = Object.fromEntries(Object.entries({ ...MARK, remote: REMOTE_MARK }).map(([k, m]) =>
+const ICONS: Record<string, string> = Object.fromEntries(Object.entries({ ...MARK, remote: REMOTE_MARK, term: TERM_MARK }).map(([k, m]) =>
   [k, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${m}</svg>`]))
 let home = ''
 // The system this runs on, read at session start; macOS has the Claude Desktop links and Terminal.
@@ -304,12 +307,15 @@ async function pollProject($: $) {
   const view = await read($, viewA)
   if (view.showDone && view.scope === 'proj' && beat - kinBeat >= REFRESH_BEATS) {
     kinBeat = beat
-    kin = (await scan($, 'codex:' + me, PROJ_MIN, [], { codex: [], claude: kin })).claude
+    kin = (await scan($, 'codex:' + me, PROJ_MIN, [], { codex: [], claude: kin, spawned: rec?.s.spawned ?? shared?.s.spawned })).claude
   }
   const inScan = new Set(claude.map(r => r.path))
   const quiet = view.showDone ? kin.filter(r => !inScan.has(r.path)) : []
-  // Desktop sessions this one started sit under it, as Claude Desktop draws them.
-  const kids = [...claude, ...quiet].map(r => ({ ...claudeRow(r, now, lastProj!), parentId: 'main' }))
+  // Desktop sessions this one started sit under it, as Claude Desktop draws them, and so do the chats its shell
+  // started, each named by its command. Such a command is an agent launch: it takes Claude's mark among the others.
+  const sh = await read($, shells)
+  const [kids, started] = fromShells([...claude, ...quiet].map(r => ({ ...claudeRow(r, now, lastProj!), parentId: 'main' })), sh)
+  if (sh.some(s => started.has(s.id) && !s.kind)) await update($, shells, l => l.map(s => (started.has(s.id) && !s.kind ? { ...s, kind: 'claude' as const } : s)))
   const s = lastProj
   const merged = (cur: Agent[]) => withJournal(mergeProject(cur, s, kids, live, past?.done ?? {}, now), [...(rec?.s.claude ?? []), ...(past?.recs ?? [])], me)
   const cur = await read($, agents)
@@ -338,7 +344,7 @@ async function pollProject($: $) {
 // of the shared record and its own read (`own`). A launch another session made is no launch here: that session is not
 // listed here, so such a run is drawn as a stranger, as it always was.
 export function ownScan(s: Scan, me: string, own: Map<string, Rec>, extra: string[], now: number): Scan {
-  const claude = s.claude.filter(r => r.desktop?.parent === me && !r.path.includes('/subagents/'))
+  const claude = s.claude.filter(r => (r.desktop?.parent === me || r.by === me) && !r.path.includes('/subagents/'))
   const byPath = new Map(s.codex.map(r => [r.path, r]))
   for (const r of own.values()) {
     const was = byPath.get(r.path)
@@ -478,7 +484,10 @@ export const openUrl = (id: string, kind: 'code' | 'work') =>
 
 function claudeRow(r: Rec, now: number, s: Pick<Scan, 'repos'>): Agent {
   const sub = r.path.includes('/subagents/')
-  const fresh = now - r.mtime < 60e3
+  // A chat another chat's shell started runs while its process says so, through a long tool call too. It is a
+  // `shell` launch whatever entry its journal names: a launcher run from Claude Desktop passes Desktop's on.
+  const shell = !sub && !!r.by
+  const fresh = now - r.mtime < 60e3 || (shell && !!r.busy)
   // A subagent sits under its session, or under the agent that spawned it when nested: that agent's journal lies in
   // the same folder, named by the id its record gives.
   const home = r.path.split('/subagents/')[0]!
@@ -490,18 +499,38 @@ function claudeRow(r: Rec, now: number, s: Pick<Scan, 'repos'>): Agent {
     t1: fresh ? undefined : r.mtime, status: fresh ? 'running' : 'idle', stats: statsOf(r),
     cwd: r.cwd, sid: sub ? undefined : r.path.split('/').pop()!.replace('.jsonl', ''), journal: r.path, live: r.live,
     open: r.desktop && !sub ? { kind: r.desktop.kind, url: openUrl(r.desktop.id, r.desktop.kind) } : undefined,
-    how: sub ? (r.meta?.requestShape === 'background' ? 'Agent · ' + t.bg : 'Agent') + (r.meta?.agentType ? ' · ' + r.meta.agentType : '') : HOW[r.entry ?? ''] ?? r.entry ?? '?',
+    how: sub ? (r.meta?.requestShape === 'background' ? 'Agent · ' + t.bg : 'Agent') + (r.meta?.agentType ? ' · ' + r.meta.agentType : '')
+      : shell ? 'shell' : HOW[r.entry ?? ''] ?? r.entry ?? '?',
+    ...(shell ? { via: 'shell' as const } : {}),
   }
 }
 
-// The Claude journals as rows: a Desktop session started from another one sits under it, when that one is listed too.
+// The Claude journals as rows: a Desktop session started from another one sits under it, when that one is listed too,
+// and so does a chat another one's shell started.
 function claudeRows(recs: Rec[], now: number, s: Pick<Scan, 'repos'>): Agent[] {
   const bySid = new Map(recs.map(r => [r.path.split('/').pop()!.replace('.jsonl', ''), r.path]))
   return recs.map(r => {
     const row = claudeRow(r, now, s)
-    const up = r.desktop?.parent && bySid.get(r.desktop.parent)
+    const from = r.desktop?.parent ?? r.by
+    const up = from && bySid.get(from)
     return up && !row.parentId ? { ...row, parentId: up } : row
   })
+}
+
+// The chats this session's shell started take the background command that started each, as a codex run takes its
+// Bash call: its title and command, and its task while it runs, so Stop ends the run. The command went out at most
+// two minutes before the chat's journal began (the launcher's own start), and the latest such is it. Returns the
+// rows and the commands that started one, which are agent launches.
+// ponytail: pairs by time alone; two launchers started within the same two minutes may swap.
+export function fromShells(kids: Agent[], list: Shell[]): [Agent[], Set<string>] {
+  const started = new Set<string>()
+  const rows = kids.map(a => {
+    const s = a.via && list.filter(x => x.kind !== 'monitor' && x.kind !== 'codex' && x.t0 <= a.t0 + 3e3 && a.t0 - x.t0 <= 120e3).sort((x, y) => y.t0 - x.t0)[0]
+    if (!s) return a
+    started.add(s.id)
+    return { ...a, title: s.title || a.title, cmd: s.cmd, how: 'shell · ' + t.bg, taskId: ENDED.has(s.status) ? undefined : s.taskId }
+  })
+  return [rows, started]
 }
 // The Codex rollouts as rows: a child thread under its parent thread, a run under the journal row (among `claude`)
 // whose Bash call launched it, titled as that call was. A launch stays even before its first turn: it is the run
@@ -597,7 +626,8 @@ const APPS: Record<string, { color: string; mark?: string }> = {
   'Remote Control': { color: '#D97757', mark: 'remote' },
   'Codex Desktop': { color: '#8B8CF8' },
 }
-const markOf = (a: Agent) => ICONS[APPS[a.how]?.mark ?? a.family]!
+// A chat another chat's shell started has a terminal's mark instead.
+const markOf = (a: Agent) => ICONS[a.via ? 'term' : APPS[a.how]?.mark ?? a.family]!
 // `field`: one cell of the details grid on a wide pane, sized to its longest usual value ("120 · 45 turns", "high" with its squares).
 // The narrowest title a one-line row keeps: past it TIME goes, and past that again the list turns into cards.
 const MIN_TITLE = 12
@@ -854,6 +884,12 @@ export const register: Register = (on, options) => {
     // A card's second line still has room for the five-square effort meter down to this width: padding, dot, model,
     // meter, tokens, context, thinking, their gaps and a few cells of tree indent.
     const cardEffLong = cols >= 2 + 2 + W.cmodel + W.eff + barW + W.ctx + W.thk + 6 + 6
+    // A Button's width in cells, for the lines that shorten their labels rather than wrap. The terminal frames a label
+    // as `[ label ]`. A desktop sets it in a proportional face inside a little over two cells of padding: a letter
+    // takes less than a cell there, a mark (◉ ☑ ●) more; measured on Claude Desktop, with other alphabets counted whole.
+    const btnW = (label: string) => (web
+      ? 2.3 + [...label].reduce((w, ch) => w + (ch > '\u2000' ? 1.3 : ch > '\u007f' ? 1 : 0.85), 0)
+      : 4 + label.length)
     const setView = (p: Partial<View>) => update($, viewA, v => ({ ...v, ...p }))
     const running = list.filter(a => a.status === 'running').length
     const nCodex = list.filter(a => a.family === 'codex').length
@@ -1030,6 +1066,7 @@ export const register: Register = (on, options) => {
               </Box>
             </Box>
             {a.open && <Box flexShrink={0}>{openBtn(a)}</Box>}
+            {a.via && !showHow && <Box flexShrink={0} marginLeft={1}>{viaMark(a)}</Box>}
           </Box>
           <Box width={modelW} flexShrink={0} overflow="hidden">
             <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + ((tight ? modelShort : modelLabel)(a.model) || '…') + ' '}</Text>
@@ -1056,11 +1093,16 @@ export const register: Register = (on, options) => {
       if (!Svg) return <Text color={color} dimColor={!app} wrap="truncate-end">{a.how}</Text>
       return (
         <Box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
-          <Svg source={markOf(a)} alt={app?.mark ? a.how : a.family} width={16} height={16} />
+          <Svg source={markOf(a)} alt={app?.mark || a.via ? a.how : a.family} width={16} height={16} />
           <Text color={color} dimColor={!app} wrap="truncate-end">{mechanism(a.how)}</Text>
         </Box>
       )
     }
+    // A shell launch's terminal mark beside its title, wherever no launch column shows it: drawn on graphical
+    // surfaces, a prompt in text on the terminal.
+    const viaMark = (a: Agent) => a.via && (Svg
+      ? <Svg key={'m' + a.id.slice(-48)} source={markOf(a)} alt={a.how} width={14} height={14} />
+      : <Text key={'m' + a.id.slice(-48)} color={C.muted}>{'>_'}</Text>)
     const openBtn = (a: Agent) =>
       a.open && (
         <Button key={'o' + a.id.slice(-48)} plain onPress={() => run(opener(a.open!.url), t.chatOpened)}>
@@ -1070,13 +1112,22 @@ export const register: Register = (on, options) => {
       )
     // Narrow pane: one agent is two lines, task and time on top, model, effort and tokens under it.
     // `guide` and `cont` draw the tree in text where the surface joins box glyphs (the terminal); `pad` is their width.
-    const card = (a: Agent, guide: string, cont: string, pad: number, fold?: ReturnType<typeof foldBtn>) => {
+    // The second line's cells are fixed, so a card narrower than they are gives them up step by step rather than run
+    // past the pane's edge: the effort meter for its code, the model's name for its short one, then THKG, then CTX.
+    // `inset` is what the tree takes beside the card (a desktop's rail, three cells a level). A chosen card's frame is
+    // a hairline on a desktop, well inside the card's own padding, so it costs nothing here. The launch after them
+    // shows only where a mark and a few letters of it fit.
+    const cardNeed = (lv: number) => 2 + 2 + 1 + (lv < 2 ? W.cmodel : W.modelShort) + 1 + (lv ? W.effShort : W.eff) + 1
+      + (web ? barW : numW + 1 + barW) + (lv < 4 ? 1 + W.ctx : 0) + (lv < 3 ? 1 + W.thk : 0)
+    const card = (a: Agent, guide: string, cont: string, pad: number, fold?: ReturnType<typeof foldBtn>, inset = pad ? pad + 1 : 0) => {
       const k = a.id.slice(-48)
       const isSel = a.id === selId
-      // An app launcher's mark sits beside the title, its mechanism (Desktop, CLI) stays on the second line;
-      // other launchers keep mark and mechanism together there.
+      const room = cols - inset
+      const lv = [cardEffLong ? 0 : 1, 2, 3].find(l => cardNeed(l) <= room) ?? 4
+      // An app launcher's mark sits beside the title, its mechanism (Desktop, CLI) stays on the second line, and so
+      // does a shell launch's terminal; other launchers keep mark and mechanism together there.
       const app = APPS[a.how]
-      const icon = Svg && app && markOf(a)
+      const icon = Svg && (app || a.via) && markOf(a)
       return (
         <Box key={'c' + k} flexDirection="column" paddingX={1} width="100%" backgroundColor={isSel && web ? SOFT.sel : undefined} {...(isSel && web ? ROUND_SEL : {})}>
           <Box flexDirection="row" gap={1} width="100%">
@@ -1093,10 +1144,10 @@ export const register: Register = (on, options) => {
               </Box>
             </Box>
             {/* Outside the shrinking title, so a squeezed card truncates the title instead of piling these up. */}
-            {(a.open || icon) && (
+            {(a.open || icon || a.via) && (
               <Box flexShrink={0} flexDirection="row" gap={1} alignItems="center">
                 {openBtn(a)}
-                {icon && <Svg source={icon} alt={a.how} width={16} height={16} />}
+                {icon ? <Svg source={icon} alt={a.how} width={16} height={16} /> : viaMark(a)}
               </Box>
             )}
             <Box width={timeW} flexShrink={0} justifyContent="flex-end"><Text mono={web || undefined} dimColor={!!a.t1}>{fmtT((a.t1 ?? now) - a.t0)}</Text></Box>
@@ -1105,18 +1156,20 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" gap={1} width="100%">
             {pad > 0 && <Box width={pad} flexShrink={0}><Text color={C.muted}>{cont}</Text></Box>}
             <Box width={2} flexShrink={0} />
-            <Box width={W.cmodel} flexShrink={0} overflow="hidden">
-              <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + (modelLabel(a.model) || '…') + ' '}</Text>
+            <Box width={lv < 2 ? W.cmodel : W.modelShort} flexShrink={0} overflow="hidden">
+              <Text color={C[a.family]} backgroundColor={web ? SOFT[a.family] : undefined} wrap="truncate-end">{' ' + ((lv < 2 ? modelLabel : modelShort)(a.model) || '…') + ' '}</Text>
             </Box>
-            {cardEffLong
-              ? <Box width={W.eff} flexShrink={0} alignItems="center">{effLong(a.effort)}</Box>
-              : <Box width={2} flexShrink={0} alignItems="center">{effShort(a.effort)}</Box>}
+            {lv
+              ? <Box width={W.effShort} flexShrink={0} alignItems="center">{effShort(a.effort)}</Box>
+              : <Box width={W.eff} flexShrink={0} alignItems="center">{effLong(a.effort)}</Box>}
             {tokCell(a)}
-            {ctxCell(a)}
-            {thinkCell(a)}
-            <Box flexGrow={1} flexShrink={1} minWidth={0}>{icon
-              ? <Text color={app!.color} wrap="truncate-end">{mechanism(a.how)}</Text>
-              : howCell(a)}</Box>
+            {lv < 4 && ctxCell(a)}
+            {lv < 3 && thinkCell(a)}
+            {room - cardNeed(lv) >= 6 && (
+              <Box flexGrow={1} flexShrink={1} minWidth={0}>{icon
+                ? <Text color={app?.color} dimColor={!app} wrap="truncate-end">{mechanism(a.how)}</Text>
+                : howCell(a)}</Box>
+            )}
           </Box>
         </Box>
       )
@@ -1177,20 +1230,26 @@ export const register: Register = (on, options) => {
       if (!bgCmds.length) return []
       const active = bgCmds.filter(s => !ENDED.has(s.status))
       const open = !view.shellsFolded
-      // A choice of two like the scope above, the running commands by default.
+      // A choice of two like the scope above, the running commands by default. A pane too narrow for the line
+      // shortens it as the scope's is, rather than wrap: the radio marks go, the chosen one staying primary, then the
+      // running ones are a dot and their count, as on the counters' line, and last the count of all stands alone.
+      const word = tight ? t.shellsShort : t.shells
+      const picks = (lv: number) => [!view.shellsAll, !!view.shellsAll].map((chosen, all) =>
+        (lv ? '' : chosen ? '◉ ' : '○ ') + (all ? (lv < 3 ? t.shellsAll(bgCmds.length) : String(bgCmds.length)) : lv < 2 ? t.shellsActive(active.length) : '● ' + active.length))
+      const [actLabel, allLabel] = [0, 1, 2].map(picks).find(p => 2 + 2 + word.length + 1 + btnW(p[0]!) + 1 + btnW(p[1]!) <= cols) ?? picks(3)
       const pick = (key: string, chosen: boolean, label: string, all: boolean) => (
         <Button key={key} variant={chosen ? 'primary' : undefined} onPress={() => void update($, viewA, v => ({ ...v, shellsAll: all, shellsFolded: false }))}>
-          {(chosen ? '◉ ' : '○ ') + label}
+          {label}
         </Button>
       )
       const out = [
         <Box key="sh-head" flexDirection="row" gap={1} alignItems="center" flexWrap="wrap" paddingX={1} marginTop={1}>
           <Button key="sh-fold" plain onPress={() => void update($, viewA, v => ({ ...v, shellsFolded: open }))}>
             {Svg ? <Text bold size="heading" color={C.muted}>{open ? '⏷' : '⏵'}</Text> : <Text bold color={C.muted}>{open ? 'ᐯ' : 'ᐳ'}</Text>}
-            <Text bold>{' ' + (tight ? t.shellsShort : t.shells)}</Text>
+            <Text bold>{' ' + word}</Text>
           </Button>
-          {pick('sh-active', !view.shellsAll, t.shellsActive(active.length), false)}
-          {pick('sh-all', !!view.shellsAll, t.shellsAll(bgCmds.length), true)}
+          {pick('sh-active', !view.shellsAll, actLabel!, false)}
+          {pick('sh-all', !!view.shellsAll, allLabel!, true)}
         </Box>,
       ]
       if (!open) return out
@@ -1371,17 +1430,17 @@ export const register: Register = (on, options) => {
           .sort((x, y) => (id ? 0 : Number(pinned.has(y.id)) - Number(pinned.has(x.id))) || x.t0 - y.t0)
       const holds = (a: Agent, id?: string): boolean => !!id && (a.id === id || kids(a.id).some(c => holds(c, id)))
       const count = (a: Agent): number => kids(a.id).reduce((n, c) => n + 1 + count(c), 0)
-      const node = (a: Agent, fold?: ReturnType<typeof foldBtn>, shut?: boolean): ReturnType<typeof Box> => {
+      const node = (a: Agent, fold?: ReturnType<typeof foldBtn>, shut?: boolean, depth = 0): ReturnType<typeof Box> => {
         const ch = shut ? [] : kids(a.id)
         return (
           <Box key={'n' + a.id.slice(-48)} flexDirection="column" width="100%">
-            {compact ? card(a, '', '', 0, fold) : row(a, '', fold)}
+            {compact ? card(a, '', '', 0, fold, depth * 3) : row(a, '', fold)}
             {ch.length > 0 && (
               <Box flexDirection="row" width="100%">
                 <Box width={2} flexShrink={0} marginLeft={1} flexDirection="row" justifyContent="center">
                   <Box width="12%" backgroundColor={C.rail} />
                 </Box>
-                <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>{ch.map(c => node(c))}</Box>
+                <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>{ch.map(c => node(c, undefined, false, depth + 1))}</Box>
               </Box>
             )}
           </Box>
@@ -1408,10 +1467,12 @@ export const register: Register = (on, options) => {
     // while pressed, its label on a light green tint;
     // Claude and Codex each switch their family off and on. The name keeps its color outside the Button (a desktop
     // draws a Button's text in its own color); the count is the Button, with a checkbox showing the switch. Off, the
-    // name turns gray and the Button dims.
+    // name turns gray and the Button dims. On the narrowest pane the family's mark stands for its name.
     const family = (f: 'claude' | 'codex', name: string, n: number) => (
       <Box key={'c-' + f} flexDirection="row" alignItems="center" gap={1}>
-        <Text bold color={off.has(f) ? C.muted : LABEL[f]}>{name}</Text>
+        {brief < 2 ? <Text bold color={off.has(f) ? C.muted : LABEL[f]}>{name}</Text>
+          : Svg ? <Svg source={ICONS[f]!} alt={name} width={16} height={16} />
+          : <Text bold color={off.has(f) ? C.muted : LABEL[f]}>{f === 'codex' ? '◆' : '✳'}</Text>}
         <Button key={'cb-' + f} dimColor={off.has(f)} onPress={() => void update($, viewA, v => ({
           ...v, off: off.has(f) ? (v.off ?? []).filter(x => x !== f) : [...(v.off ?? []), f],
         }))}>
@@ -1420,10 +1481,26 @@ export const register: Register = (on, options) => {
       </Box>
     )
     // The token sums join the counters' line only where they fit on it whole. Counted in cells: the panel's frame and
-    // paddings, the dot and its label, each family's name and its count in a Button's frame (`[ ]` on the terminal,
-    // a little narrower on a desktop), the gaps between.
-    const counter = (name: string, n: number) => 1 + name.length + 1 + 4 + ('☑ ' + n).length
-    const countersW = 6 + 2 + t.runningN(running).length + counter('Claude', list.length - nCodex) + counter('Codex', nCodex)
+    // paddings, the dot and its label, each family's name and its count in a Button (`btnW`), the gaps between.
+    // A pane too narrow for them shortens its labels step by step rather than wrap a line: the running count loses
+    // its word, the dot beside it saying the same, then each family's name gives way to its two-cell mark.
+    const counter = (nameW: number, n: number) => 1 + nameW + 1 + btnW('☑ ' + n)
+    const runLabel = (lv: number) => (lv ? String(running) : t.runningN(running))
+    const countersAt = (lv: number) => 6 + 2 + runLabel(lv).length + counter(lv < 2 ? 6 : 2, list.length - nCodex) + counter(lv < 2 ? 5 : 2, nCodex)
+    const countersW = countersAt(0)
+    const brief = [0, 1].find(lv => countersAt(lv) <= cols) ?? 2
+    // The switches above them the same way: short words first (a hidden count without its word), then the rule goes
+    // and the scope's radio marks with it, the chosen one staying primary.
+    const head = (lv: number) => {
+      const radio = (chosen: boolean) => (lv === 2 ? '' : chosen ? '◉ ' : '○ '), s = lv ? t.scopeShort : t.scope
+      return {
+        proj: radio(view.scope === 'proj') + s.proj, all: radio(view.scope === 'all') + s.all, rule: lv < 2,
+        done: (view.showDone ? '☑ ' : '☐ ') + (lv ? t.finishedShort : t.finished), hid: lv ? ' ' + hidden.size : t.hidden(hidden.size),
+      }
+    }
+    const headW = (h: ReturnType<typeof head>) =>
+      4 + btnW(h.proj) + 1 + btnW(h.all) + (h.rule ? 2 : 0) + 1 + btnW(h.done) + (hidden.size ? 1 + btnW('⊘' + h.hid) : 0)
+    const hd = [0, 1].map(head).find(h => headW(h) <= cols) ?? head(2)
     const sumIO = `${t.sumIn} ${fmtK(tokIn)}  ${t.sumOut} ${fmtK(tokOut)}  `, sumTotal = `${t.sumTotal} ${fmtK(tok)}`
     const showTotal = countersW + 1 + sumTotal.length <= cols
     const showIO = !tight && countersW + 1 + sumIO.length + sumTotal.length <= cols
@@ -1438,18 +1515,18 @@ export const register: Register = (on, options) => {
                 agents are a switch, drawn as a checkbox like the Claude and Codex counters, set apart by a rule. */}
             <Box key="scope" flexDirection="row" gap={1}>
               <Button key="s-proj" variant={view.scope === 'proj' ? 'primary' : undefined} onPress={() => void setView({ scope: 'proj' })}>
-                {(view.scope === 'proj' ? '◉ ' : '○ ') + t.scope.proj}
+                {hd.proj}
               </Button>
               <Button key="s-all" variant={view.scope === 'all' ? 'primary' : undefined} onPress={() => void setView({ scope: 'all' }).then(() => pollAll($))}>
-                {(view.scope === 'all' ? '◉ ' : '○ ') + t.scope.all}
+                {hd.all}
               </Button>
             </Box>
-            <Box key="rule" alignItems="center"><Text color={C.muted}>│</Text></Box>
+            {hd.rule && <Box key="rule" alignItems="center"><Text color={C.muted}>│</Text></Box>}
             <Button key="f-done" onPress={() => void setView({ showDone: !view.showDone }).then(() => pollAll($))}>
-              {(view.showDone ? '☑ ' : '☐ ') + t.finished}
+              {hd.done}
             </Button>
             {hidden.size > 0 && (
-              <Button key="f-hidden" onPress={() => void setView({ hidden: [] })}><Text color={C.muted}>⊘</Text>{t.hidden(hidden.size)}</Button>
+              <Button key="f-hidden" onPress={() => void setView({ hidden: [] })}><Text color={C.muted}>⊘</Text>{hd.hid}</Button>
             )}
           </Box>
           <Box flexDirection="row" gap={1} flexWrap="wrap" paddingX={1}>
@@ -1458,7 +1535,7 @@ export const register: Register = (on, options) => {
               {/* The tint hugs the Button itself, so it never reaches past what a press lands on. No round border here:
                 a desktop draws a border a whole cell wide, which would make this one control taller than its row. */}
             <Box marginLeft={1} backgroundColor={view.runningOnly ? C.running + '40' : undefined}>
-                <Button key="cb-running" plain onPress={() => void setView({ runningOnly: !view.runningOnly })}>{t.runningN(running)}</Button>
+                <Button key="cb-running" plain onPress={() => void setView({ runningOnly: !view.runningOnly })}>{runLabel(brief)}</Button>
               </Box>
             </Box>
             {family('claude', 'Claude', list.length - nCodex)}

@@ -59,6 +59,13 @@ export const REMOTE_MARK =
   '<rect x="2.5" y="2.8" width="6" height="10.4" rx="1.6" fill="#FAF6EF"/><path d="M4.4 10.8h2.2" stroke="#D97757" stroke-width="1.1" stroke-linecap="round"/>' +
   '<path d="M10.5 6.1a2.7 2.7 0 0 1 0 3.8M12.4 4.3a5.2 5.2 0 0 1 0 7.4" fill="none" stroke="#FAF6EF" stroke-width="1.6" stroke-linecap="round"/>'
 
+// Our own terminal mark, for a chat another chat's shell started: a dark window, a cream prompt and Claude's
+// terracotta cursor after it.
+export const TERM_MARK =
+  '<rect width="16" height="16" rx="3.5" fill="#2f3440"/>' +
+  '<path d="M3.8 5L6.8 8L3.8 11" fill="none" stroke="#FAF6EF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<path d="M8.6 11.1H12.2" stroke="#D97757" stroke-width="1.9" stroke-linecap="round"/>'
+
 // A low pill on a gray rounded track: an optional icon first (SVG markup on a 16-unit square), then one square per
 // item in its color, or each group's count as bold digits; the first count shows even at 0, as the terminal's does.
 export function chip(parts: { n: number; color: string }[], asCounts: boolean, icon?: string, h = 16) {

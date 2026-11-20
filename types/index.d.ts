@@ -22,6 +22,9 @@ export type Agent = {
   prompt?: string
   atype?: string
   taskId?: string
+  // Started by another chat's shell command (a launcher script, `claude -p` in a Bash call), not by its Agent tool:
+  // drawn with a terminal's mark.
+  via?: 'shell'
   stats?: Stats
 }
 

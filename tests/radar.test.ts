@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { chip, CLAUDE_MARK, CODEX_MARK, folderMark, meter, projectColor, sparkline, stackBar } from '../hooks/charts'
 
 import type { Agent, Shell } from '../types'
-import { asq, ctxColor, effCode, fmtT, fromScan, handoffUrl, mechanism, mergeProject, modelLabel, modelShort, ordered, ownScan, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, thinkColor, thinkShare, trimShells, withJournal } from '../hooks/register'
+import { asq, ctxColor, effCode, fmtT, fromScan, fromShells, handoffUrl, mechanism, mergeProject, modelLabel, modelShort, ordered, ownScan, parseCodex, pastShells, projectOf, ranNothing, shq, taskEnded, thinkColor, thinkShare, trimShells, withJournal } from '../hooks/register'
 
 test('parses a codex exec command line', () => {
   const p = parseCodex(`codex exec -m gpt-6-astra -c model_reasoning_effort=max -s read-only "Review the PaymentService diff"`)
@@ -266,6 +266,38 @@ test("this session's share of the machine-wide scan is what its own scan read", 
   expect(by('/c/read-here.jsonl')!.tokOut).toBe(9)
   expect(by('/c/read-here.jsonl')!.launch!.cmd).toBe('codex exec c')
   expect(by('/c/stale-here.jsonl')!.tokOut).toBe(2)
+})
+
+test("a chat another chat's shell started sits under it with a terminal's mark, named by the command that started it", () => {
+  const now = Date.parse('2026-10-16T12:00:00Z')
+  const at = (ms: number) => new Date(now - ms).toISOString()
+  // Its journal names Desktop as its entry (a launcher run from Desktop passes it on), and it has been quiet five
+  // minutes through a long tool call, while its process says it is at work.
+  const lead = { path: '/p/lead.jsonl', mtime: now - 600e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', title: 'Lead', t0: at(3600e3) }
+  const run = { path: '/q/run.jsonl', mtime: now - 300e3, tokIn: 1, tokOut: 1, cwd: '/x/Tool', t0: at(900e3), entry: 'claude-desktop', by: 'lead', busy: true }
+  const rows = fromScan({ codex: [], claude: [lead, run] }, now)
+  expect(ordered(rows).map(r => r.guide + r.a.title)).toEqual(['Lead', '└─ Tool'])
+  const row = rows.find(a => a.id === '/q/run.jsonl')!
+  expect([row.via, row.how, row.status, row.t1]).toEqual(['shell', 'shell', 'running', undefined])
+  expect(fromScan({ codex: [], claude: [lead, { ...run, busy: false }] }, now).find(a => a.id === '/q/run.jsonl')!.status).toBe('idle')
+  // This session's share holds the chats its shell started, not another's.
+  const v = ownScan({ codex: [], claude: [run, { ...run, path: '/q/theirs.jsonl', by: 'other' }] }, 'lead', new Map(), [], now)
+  expect(v.claude.map(r => r.path)).toEqual(['/q/run.jsonl'])
+  // There it takes the background command that went out last within two minutes before it: not one after it, not a
+  // watch, not one long before.
+  const sh: Shell[] = [
+    { id: 'tu1', cmd: 'make', t0: now - 1100e3, status: 'completed' },
+    { id: 'tu2', cmd: 'python launcher.py start', title: 'Executor round', t0: now - 902e3, status: 'running', taskId: 'b2' },
+    { id: 'tu3', cmd: 'until [ -f x ]; do sleep 1; done', t0: now - 901e3, status: 'running', kind: 'monitor' },
+    { id: 'tu4', cmd: 'npm test', t0: now - 880e3, status: 'running' },
+  ]
+  const lone: Agent = { ...row, id: '/q/plain.jsonl', via: undefined }
+  const [kids, started] = fromShells([{ ...row, parentId: 'main' }, lone], sh)
+  expect([kids[0]!.title, kids[0]!.cmd, kids[0]!.how, kids[0]!.taskId]).toEqual(['Executor round', 'python launcher.py start', 'shell · bg', 'b2'])
+  expect(kids[1]).toEqual(lone)
+  expect([...started]).toEqual(['tu2'])
+  // Its command ended, there is no task left to stop.
+  expect(fromShells([row], sh.map(s => ({ ...s, status: 'completed' })))[0][0]!.taskId).toBeUndefined()
 })
 
 test('past the budget the oldest ended commands go first; running ones stay', () => {

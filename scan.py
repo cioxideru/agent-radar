@@ -217,6 +217,32 @@ def remote(recs):
     # say they are alive. Desktop chats with Remote Control on carry a hostSessionId.
     return {d['sessionId'] for d in recs if d.get('sessionId') and d.get('bridgeSessionId') and not d.get('hostSessionId') and alive(d.get('pid'))}
 
+def launched(recs):
+    # The chats another chat's shell started (a launcher script, a claude -p in a Bash call): such a chat's process
+    # descends from the other's, through the shell and whatever ran in it. Desktop's own chats (hostSessionId) never
+    # do, so with none of the rest alive the process table is not asked. Returns the live ones' chat → the chat above
+    # it, and those whose record says they are at work: a headless run's journal goes quiet through a long tool call.
+    kids = [d for d in recs if d.get('sessionId') and not d.get('hostSessionId') and alive(d.get('pid'))]
+    if not kids or sys.platform == 'win32':
+        return {}, set()
+    try:
+        import subprocess
+        table = subprocess.run(['ps', '-A', '-o', 'pid=,ppid='], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}, set()
+    up = {int(f[0]): int(f[1]) for f in (l.split() for l in table.splitlines()) if len(f) == 2 and f[0].isdigit() and f[1].isdigit()}
+    chat = {d['pid']: d['sessionId'] for d in recs if d.get('sessionId') and isinstance(d.get('pid'), int)}
+    links = {}
+    for d in kids:
+        p = up.get(d['pid'])
+        for _ in range(16):
+            if not p or p == 1 or p in chat:
+                break
+            p = up.get(p)
+        if p in chat and p != d['pid']:
+            links[d['sessionId']] = chat[p]
+    return links, {d['sessionId'] for d in kids if d['sessionId'] in links and d.get('status') == 'busy'}
+
 # Background tasks this journal was told have ended, by the tool call that started them, and the background shell
 # commands it ran (newest last), so a load picks up what ran before it.
 if mode == 'ended':
@@ -276,9 +302,9 @@ def withDesk(r, desk):
         r['cwd'] = r['desktop']['cwd']
     return r
 
-def parents(paths, desk):
+def parents(paths, desk, spawned):
     # The journals the given ones hang under: a subagent's session and, when nested, its parent agent; a Desktop
-    # session's starter. Read even when quiet, so no child is drawn as a root of its own.
+    # session's starter; the chat whose shell started it. Read even when quiet, so no child is drawn as a root of its own.
     out = set()
     for p in paths:
         if '/subagents/' in p:
@@ -289,8 +315,9 @@ def parents(paths, desk):
                 out.add(s + '/subagents/agent-' + str(up) + '.jsonl')
         else:
             d = desk.get(os.path.basename(p)[:36])
-            if d and d.get('parent'):
-                out.update(files(H + '/.claude/projects/*/' + d['parent'] + '.jsonl'))
+            up = (d or {}).get('parent') or (spawned.get(os.path.basename(p)[:-6]) or [None])[0]
+            if up:
+                out.update(files(H + '/.claude/projects/*/' + up + '.jsonl'))
     return out - set(paths)
 
 days = {(datetime.date.today() - datetime.timedelta(days=i)).strftime('%Y/%m/%d') for i in (0, 1)}
@@ -321,20 +348,30 @@ if mode == 'all':
     desk = desktop()
     procs = [side(p) or {} for p in files(H + '/.claude/sessions/*.json')]
     held = remote(procs)
+    links, busy = launched(procs)
+    # Who started whom, kept a day past the child's end: its process is gone then, and a finished run stays under the
+    # chat that started it. The previous scan carries it in.
+    spawned = {k: v for k, v in (last.get('spawned') or {}).items() if isinstance(v, list) and len(v) == 2 and now - v[1] < 86400}
+    spawned.update((k, [v, now]) for k, v in links.items())
+    out['spawned'] = spawned
     # Every session's Desktop title, so a quiet one that is not listed below still reads its own here.
     out['titles'] = {d['sessionId']: desk[d['sessionId']]['title'] for d in procs if (desk.get(d.get('sessionId')) or {}).get('title')}
     cl = recent(files(H + '/.claude/projects/*/*.jsonl') + files(H + '/.claude/projects/*/*/subagents/agent-*.jsonl'))
-    cl.update(stats(q for sid in held for q in files(H + '/.claude/projects/*/' + sid + '.jsonl')))
-    add = parents(cl, desk)
+    # A started chat whose process lives is listed however long its journal has been quiet, as a held one is.
+    cl.update(stats(q for sid in set(held) | set(links) for q in files(H + '/.claude/projects/*/' + sid + '.jsonl')))
+    add = parents(cl, desk, spawned)
     while add:
         add = stats(add)
         cl.update(add)
-        add = parents(add, desk)
+        add = parents(add, desk, spawned)
     for p, st in cl.items():
         r = withDesk(parse(p, st, claude), desk)
-        r['live'] = os.path.basename(p)[:-6] in held
+        sid = os.path.basename(p)[:-6]
+        r['live'] = sid in held
         if r['live']:
             r['entry'] = 'remote-control'
+        # Set on every row, cached ones too: the chat whose shell started it, and whether its process is at work.
+        r['by'], r['busy'] = (spawned.get(sid) or [None])[0], sid in busy
         out['claude'].append(r)
 elif me:
     desk = desktop()
@@ -343,6 +380,12 @@ elif me:
     for sid, d in desk.items():
         for p, st in stats(files(H + '/.claude/projects/*/' + sid + '.jsonl') if d['parent'] == me else []).items():
             out['claude'].append(withDesk(parse(p, st, claude), desk))
+    # And the chats its shell started, by the links the scan of all keeps, which come in with the previous scan.
+    for sid, v in (last.get('spawned') or {}).items():
+        for p, st in stats(files(H + '/.claude/projects/*/' + sid + '.jsonl') if isinstance(v, list) and v[:1] == [me] else []).items():
+            r = withDesk(parse(p, st, claude), desk)
+            r['by'], r['busy'] = me, False
+            out['claude'].append(r)
 # A codex_exec rollout starts within two minutes of the Bash call that launched it.
 launches = [l for r in out['claude'] for l in r.get('launches') or []]
 for r in out['codex']:
