@@ -25,6 +25,8 @@ export type Agent = {
   // Started by another chat's shell command (a launcher script, `claude -p` in a Bash call), not by its Agent tool:
   // drawn with a terminal's mark.
   via?: 'shell'
+  // When the shell of that command began, as the process table tells it: what pairs the row with the command.
+  viaAt?: number
   stats?: Stats
 }
 
@@ -53,6 +55,8 @@ export type Shell = {
   title?: string
   t0: number
   t1?: number
+  // When its call came back with a task: the command had begun by then, where `t0` is when it was asked for.
+  at?: number
   status: string
   taskId?: string
   // A Monitor watch: it reports no end of its own, so it counts as running until its deadline.

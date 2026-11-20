@@ -181,7 +181,7 @@ test('the THKG column and the details show the share of the output spent thinkin
   const now = Date.now()
   mock.clock(on, { now })
   const row = (path: string, title: string, reasoning?: number) => ({ path, mtime: now, tokIn: 10, tokOut: 2000, reasoning, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title })
-  mock.store(on, { allScan: { v: 4, at: now, mins: 15, s: { codex: [], claude: [row('/p/t1.jsonl', 'Deep thinker', 880), row('/p/t2.jsonl', 'Older journal')] } } })
+  mock.store(on, { allScan: { v: 5, at: now, mins: 15, s: { codex: [], claude: [row('/p/t1.jsonl', 'Deep thinker', 880), row('/p/t2.jsonl', 'Older journal')] } } })
   const press = async (ui: { find: (q: never) => Promise<unknown>; press: (q: { key: string }) => Promise<unknown> }, title: RegExp) =>
     ui.press({ key: ((await ui.find({ type: 'Button', text: title } as never)) as { key: string }).key })
   for (const surface of ['desktop', 'terminal'] as const) {
@@ -206,7 +206,7 @@ test('TIME is as wide as its longest time, centered on the desktop as the column
   mock.clock(on, { now })
   const row = (path: string, title: string, ago: number, quiet = 0) => ({ path, mtime: now - quiet, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - ago).toISOString(), title })
   // One running for 37 minutes, one quiet for five after 3h15m.
-  mock.store(on, { allScan: { v: 4, at: now, mins: 15, s: { codex: [], claude: [row('/p/a.jsonl', 'Minutes', 37 * 60e3), row('/p/b.jsonl', 'Hours', (3 * 60 + 15) * 60e3, 5 * 60e3)] } } })
+  mock.store(on, { allScan: { v: 5, at: now, mins: 15, s: { codex: [], claude: [row('/p/a.jsonl', 'Minutes', 37 * 60e3), row('/p/b.jsonl', 'Hours', (3 * 60 + 15) * 60e3, 5 * 60e3)] } } })
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
     await ui.press({ key: 's-all' })
@@ -311,7 +311,7 @@ test('the All scope reuses a fresh scan another chat left in the store', async (
   on('process.run', () => { runs++; return { value: { exitCode: 1, stdout: '', stderr: '' } } as never })
   const now = Date.now()
   mock.clock(on, { now })
-  mock.store(on, { allScan: { v: 4, at: now, mins: 15, s: { codex: [], claude: [
+  mock.store(on, { allScan: { v: 5, at: now, mins: 15, s: { codex: [], claude: [
     { path: '/p/s9.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Shared scan row' },
   ] } } })
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
@@ -328,7 +328,7 @@ test("this chat's own session title stands out on a tint", async ($, on) => {
     next({ ...e, value: [main, ...e.value.filter(a => (a as { id: string }).id !== 'main')] })) as never)
   // A fresh All scan holding this session's journal and another chat's.
   mock.clock(on, { now: Date.now() })
-  mock.store(on, { allScan: { v: 4, at: Date.now(), mins: 15, s: { codex: [], claude: [
+  mock.store(on, { allScan: { v: 5, at: Date.now(), mins: 15, s: { codex: [], claude: [
     { path: '/p/S1.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date().toISOString(), title: 'Own journal row' },
     { path: '/p/S2.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date().toISOString(), title: 'Other chat row' },
   ] } } })
@@ -446,7 +446,7 @@ test('a chat Remote Control holds open stays listed under its own mark, past the
   const now = Date.now()
   const quiet = { tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 864e5).toISOString(), mtime: now - 3600e3 }
   mock.clock(on, { now })
-  mock.store(on, { allScan: { v: 4, at: now, mins: 15, s: { codex: [], claude: [
+  mock.store(on, { allScan: { v: 5, at: now, mins: 15, s: { codex: [], claude: [
     { ...quiet, path: '/p/R.jsonl', title: 'Held chat', entry: 'remote-control', live: true },
     { ...quiet, path: '/p/E.jsonl', title: 'Ended chat', entry: 'remote-control' },
     ...Array.from({ length: 50 }, (_, i) => ({ path: `/p/n${i}.jsonl`, mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), title: 'Newer ' + i })),
@@ -469,7 +469,7 @@ test('among all sessions a quiet session still heads its running subagent, so th
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
   const now = Date.now()
   mock.clock(on, { now })
-  mock.store(on, { allScan: { v: 4, at: now, mins: 15, s: { codex: [], claude: [
+  mock.store(on, { allScan: { v: 5, at: now, mins: 15, s: { codex: [], claude: [
     { path: '/p/Q.jsonl', mtime: now - 40 * 60e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 3600e3).toISOString(), title: 'Quiet lead' },
     { path: '/p/Q/subagents/agent-b1.jsonl', mtime: now, tokIn: 1, tokOut: 1, cwd: '/x/Proj', t0: new Date(now - 60e3).toISOString(), meta: { description: 'Busy helper' } },
   ] } } })
@@ -558,7 +558,7 @@ test('a quiet session starts Python for the shared scan once a minute, and for a
   // Load: the shared scan and one look back through the journal.
   await clock.advance(6000)
   expect(w.modes()).toEqual(['all', 'ended'])
-  expect((w.store.allScan as { v: number }).v).toBe(4)
+  expect((w.store.allScan as { v: number }).v).toBe(5)
   await clock.advance(30000)
   expect(w.runs).toHaveLength(2)
   // A new rollout is read on its own at the next beat.
@@ -678,7 +678,7 @@ test('closing the pane in another chat arrives within twelve seconds, and the st
 test("a chat reads another's fresh scan instead of making its own, and a stale one starts a scan the next chat honors", async ($, on) => {
   const clock = mock.clock(on, { now: start })
   const w = session(on)
-  w.store.allScan = { v: 4, at: start + 2000, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
+  w.store.allScan = { v: 5, at: start + 2000, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
   await $.session.start(START)
   await clock.advance(3000)
   expect(w.modes()).toEqual(['ended'])
@@ -701,7 +701,7 @@ test("a record of another version is left alone: its rows are not drawn and this
   await $.session.start(START)
   await clock.advance(3000)
   expect(w.modes()).toEqual(['all', 'ended'])
-  expect((w.store.allScan as { v: number }).v).toBe(4)
+  expect((w.store.allScan as { v: number }).v).toBe(5)
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'desktop', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
   await ui.press({ key: 's-all' })
   expect(await ui.find({ text: /Old record row/ } as never)).toBeUndefined()
@@ -729,7 +729,7 @@ test('a change in a child session waits for a scan newer than itself, however fr
 test('a scan that failed leaves the record as it was', async ($, on) => {
   const clock = mock.clock(on, { now: start })
   const w = session(on)
-  const kept = { v: 4, at: start - 3600e3, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
+  const kept = { v: 5, at: start - 3600e3, mins: 15, s: { codex: [], claude: [], dirs: [DAY] } }
   w.store.allScan = kept
   w.scan = {}
   await $.session.start(START)
@@ -787,8 +787,12 @@ test("a chat this session's shell started sits under it with a terminal's mark, 
   on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bgL1' } }) as never)
   await $.session.start(START)
   await $.tool.call({ tool: 'Bash', command: 'python launcher.py start --cwd /x/Tool', description: 'Executor round', run_in_background: true })
-  // Its journal began a second later; quiet for minutes since, while its process is at work.
-  w.scan.claude = [{ path: '/p/run.jsonl', mtime: Date.now() - 300e3, tokIn: 5, tokOut: 2, cwd: '/x/Tool', t0: new Date(Date.now() + 1000).toISOString(), entry: 'claude-desktop', model: 'claude-opus-5-5', by: SID, busy: true }]
+  // Its journal began a second later; quiet for minutes since, while its process is at work. The shell it descends
+  // from began the second the command went out, which is what names it; a subagent of its own hangs under it.
+  w.scan.claude = [
+    { path: '/p/run.jsonl', mtime: Date.now() - 300e3, tokIn: 5, tokOut: 2, cwd: '/x/Tool', t0: new Date(Date.now() + 1000).toISOString(), entry: 'claude-desktop', model: 'claude-opus-5-5', by: SID, busy: true, up: true, shellAt: Math.floor(Date.now() / 1000) },
+    { path: '/p/run/subagents/agent-a1.jsonl', mtime: Date.now(), tokIn: 1, tokOut: 1, cwd: '/x/Tool', t0: new Date(Date.now() + 2000).toISOString(), model: 'claude-opus-5-5', meta: { description: 'Helper of the run' } },
+  ]
   await clock.advance(3000)
   for (const [surface, bodyColumns] of [['desktop', 80], ['terminal', 80], ['desktop', 110]] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-radar', surface, component: 'Pane', requestId: 'agent-radar', props: { bodyColumns } as never })
@@ -805,6 +809,8 @@ test("a chat this session's shell started sits under it with a terminal's mark, 
   // Running, under this session; its Stop ends the command that started it.
   const ui = await $.ui.mount({ plugin: 'agent-radar', surface: 'terminal', component: 'Pane', requestId: 'agent-radar', props: { bodyColumns: 110 } as never })
   expect(await ui.find({ type: 'Text', text: /└─ / })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^   └─ $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /^Helper of the run$/ } as never)).toBeDefined()
   await ui.press({ key: ((await ui.find({ type: 'Button', text: /^Executor round$/ } as never)) as { key: string }).key })
   expect(await ui.find({ type: 'Text', text: /running/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', text: /Stop/ } as never)).toBeDefined()

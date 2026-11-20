@@ -10,20 +10,22 @@ type $ = EngineInterface
 // dirs: the folders a new rollout lands in; watch: the folders of Desktop's records; titles: Desktop's title of each
 // live session, by its id; repos: the repository of each listed folder that is a git worktree.
 // records: what Desktop's records say, which the next scan need not read again; it stays with this chat, out of the store.
-// spawned: each chat another chat's shell started → [that chat, when last seen alive], kept a day by the scans.
-type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string>; repos?: Record<string, string>; spawned?: Record<string, [string, number]>; records?: unknown }
+// spawned: each chat another chat's shell started → [that chat, when last seen alive, when the shell that started it
+// began], kept a day by the scans.
+type Scan = { codex: Rec[]; claude: Rec[]; title?: string; dirs?: string[]; watch?: string[]; titles?: Record<string, string>; repos?: Record<string, string>; spawned?: Record<string, [string, number, (number | null)?]>; records?: unknown }
 // The machine-wide scan both tabs draw from, as it lies in the shared store. `v` tells this shape: a chat still on an
 // older mod writes none, a newer one another number, and each scans for itself rather than read the other's.
 type Shared = { v: number; at: number; mins: number; s: Scan }
-const SCHEMA = 4
+const SCHEMA = 5
 type Rec = {
   path: string; mtime: number; size?: number; tokIn: number; tokOut: number; cwd?: string; t0?: string
   model?: string; effort?: string; title?: string
   originator?: string; started?: number; done?: number
   // A subagent's record beside its journal; `parentAgentId` when another agent spawned it, not the session.
   // live: a chat claude remote-control holds open, listed however long it has been quiet.
-  // by: the chat whose shell started this one (its process descends from that chat's); busy: its process is at work.
-  by?: string | null; busy?: boolean
+  // by: the chat whose shell started this one (its process descends from that chat's); busy: its process is at work;
+  // up: its process lives at all; shellAt: when the shell that started it began, in seconds.
+  by?: string | null; busy?: boolean; up?: boolean; shellAt?: number | null
   entry?: string; live?: boolean; meta?: { description?: string; agentType?: string; requestShape?: string; parentAgentId?: string } | null
   // The `codex exec` calls a Claude journal made: the scanner's own, carried so a cached journal still pairs its runs.
   launches?: unknown[]
@@ -314,7 +316,8 @@ async function pollProject($: $) {
   // Desktop sessions this one started sit under it, as Claude Desktop draws them, and so do the chats its shell
   // started, each named by its command. Such a command is an agent launch: it takes Claude's mark among the others.
   const sh = await read($, shells)
-  const [kids, started] = fromShells([...claude, ...quiet].map(r => ({ ...claudeRow(r, now, lastProj!), parentId: 'main' })), sh)
+  // Whatever they started and their subagents hang under them; the rest hang under this session's own row.
+  const [kids, started] = fromShells(claudeRows([...claude, ...quiet], now, lastProj!).map(a => (a.parentId ? a : { ...a, parentId: 'main' })), sh)
   if (sh.some(s => started.has(s.id) && !s.kind)) await update($, shells, l => l.map(s => (started.has(s.id) && !s.kind ? { ...s, kind: 'claude' as const } : s)))
   const s = lastProj
   const merged = (cur: Agent[]) => withJournal(mergeProject(cur, s, kids, live, past?.done ?? {}, now), [...(rec?.s.claude ?? []), ...(past?.recs ?? [])], me)
@@ -344,7 +347,15 @@ async function pollProject($: $) {
 // of the shared record and its own read (`own`). A launch another session made is no launch here: that session is not
 // listed here, so such a run is drawn as a stranger, as it always was.
 export function ownScan(s: Scan, me: string, own: Map<string, Rec>, extra: string[], now: number): Scan {
-  const claude = s.claude.filter(r => (r.desktop?.parent === me || r.by === me) && !r.path.includes('/subagents/'))
+  // Everything under this session: the chats it started, in Desktop or from its shell, those they started in turn,
+  // and the subagents of them all. Its own subagents come through the hooks.
+  const sidOf = (r: Rec) => r.path.split('/subagents/')[0]!.split('/').pop()!.replace('.jsonl', '')
+  const upOf = new Map(s.claude.filter(r => !r.path.includes('/subagents/')).map(r => [sidOf(r), r.desktop?.parent ?? r.by]))
+  const mine = (sid: string, depth = 0): boolean => {
+    const up = upOf.get(sid)
+    return !!up && (up === me || (depth < 8 && mine(up, depth + 1)))
+  }
+  const claude = s.claude.filter(r => mine(sidOf(r)))
   const byPath = new Map(s.codex.map(r => [r.path, r]))
   for (const r of own.values()) {
     const was = byPath.get(r.path)
@@ -487,7 +498,9 @@ function claudeRow(r: Rec, now: number, s: Pick<Scan, 'repos'>): Agent {
   // A chat another chat's shell started runs while its process says so, through a long tool call too. It is a
   // `shell` launch whatever entry its journal names: a launcher run from Claude Desktop passes Desktop's on.
   const shell = !sub && !!r.by
-  const fresh = now - r.mtime < 60e3 || (shell && !!r.busy)
+  // Its process gone, such a run is over at once, where another row waits for its journal to go quiet.
+  const gone = shell && r.up === false
+  const fresh = !gone && (now - r.mtime < 60e3 || (shell && !!r.busy))
   // A subagent sits under its session, or under the agent that spawned it when nested: that agent's journal lies in
   // the same folder, named by the id its record gives.
   const home = r.path.split('/subagents/')[0]!
@@ -496,12 +509,12 @@ function claudeRow(r: Rec, now: number, s: Pick<Scan, 'repos'>): Agent {
     id: r.path, parentId: sub ? up : undefined, project: projectIn(s, r.cwd),
     title: r.meta?.description ?? r.title ?? projectOf(r.cwd), model: (r.model ?? '?').replace(/^claude-/, ''),
     family: 'claude', effort: r.effort, tokIn: r.tokIn, tokOut: r.tokOut, t0: r.t0 ? Date.parse(r.t0) : r.mtime,
-    t1: fresh ? undefined : r.mtime, status: fresh ? 'running' : 'idle', stats: statsOf(r),
+    t1: fresh ? undefined : r.mtime, status: fresh ? 'running' : gone ? 'completed' : 'idle', stats: statsOf(r),
     cwd: r.cwd, sid: sub ? undefined : r.path.split('/').pop()!.replace('.jsonl', ''), journal: r.path, live: r.live,
     open: r.desktop && !sub ? { kind: r.desktop.kind, url: openUrl(r.desktop.id, r.desktop.kind) } : undefined,
     how: sub ? (r.meta?.requestShape === 'background' ? 'Agent · ' + t.bg : 'Agent') + (r.meta?.agentType ? ' · ' + r.meta.agentType : '')
       : shell ? 'shell' : HOW[r.entry ?? ''] ?? r.entry ?? '?',
-    ...(shell ? { via: 'shell' as const } : {}),
+    ...(shell ? { via: 'shell' as const, ...(r.shellAt ? { viaAt: r.shellAt * 1000 } : {}) } : {}),
   }
 }
 
@@ -518,17 +531,28 @@ function claudeRows(recs: Rec[], now: number, s: Pick<Scan, 'repos'>): Agent[] {
 }
 
 // The chats this session's shell started take the background command that started each, as a codex run takes its
-// Bash call: its title and command, and its task while it runs, so Stop ends the run. The command went out at most
-// two minutes before the chat's journal began (the launcher's own start), and the latest such is it. Returns the
-// rows and the commands that started one, which are agent launches.
-// ponytail: pairs by time alone; two launchers started within the same two minutes may swap.
+// Bash call: its title and command, its task while it runs, so Stop ends the run, and its end. The scanner tells when
+// the shell under this session that the chat descends from began (`viaAt`, to the second): that shell is the Bash
+// call's own, so the command is the one that started then (`at`: when its call came back with a task) and still ran.
+// A command read back from the journal has only the time it was asked for, which a wait for permission parts from
+// its start, so it gets two minutes. A chat a foreground call started has no command here and keeps its own name.
+// Returns the rows and the commands that started one, which are agent launches.
 export function fromShells(kids: Agent[], list: Shell[]): [Agent[], Set<string>] {
   const started = new Set<string>()
   const rows = kids.map(a => {
-    const s = a.via && list.filter(x => x.kind !== 'monitor' && x.kind !== 'codex' && x.t0 <= a.t0 + 3e3 && a.t0 - x.t0 <= 120e3).sort((x, y) => y.t0 - x.t0)[0]
+    const at = a.viaAt
+    const s = at === undefined ? undefined : list
+      .filter(x => x.kind !== 'monitor' && x.kind !== 'codex' && (!x.t1 || x.t1 >= at - 2e3))
+      .map(x => ({ x, d: at - (x.at ?? x.t0) }))
+      .filter(({ x, d }) => (x.at ? d >= -6e3 && d <= 2e3 : d >= -2e3 && d <= 120e3))
+      .sort((p, q) => Math.abs(p.d) - Math.abs(q.d))[0]?.x
     if (!s) return a
     started.add(s.id)
-    return { ...a, title: s.title || a.title, cmd: s.cmd, how: 'shell · ' + t.bg, taskId: ENDED.has(s.status) ? undefined : s.taskId }
+    const over = ENDED.has(s.status)
+    return {
+      ...a, title: s.title || a.title, cmd: s.cmd, how: 'shell · ' + t.bg, taskId: over ? undefined : s.taskId,
+      ...(over && a.status === 'running' ? { status: s.status, t1: s.t1 ?? a.stats?.lastAt } : {}),
+    }
   })
   return [rows, started]
 }
@@ -798,7 +822,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const failed = !!(r.deny || r.isError)
     const taskId = (r.result as { backgroundTaskId?: string } | undefined)?.backgroundTaskId
-    if (bg) await update($, shells, l => l.map(s => (s.id !== sid ? s : failed ? { ...s, status: 'failed', t1: Date.now() } : { ...s, taskId })))
+    if (bg) await update($, shells, l => l.map(s => (s.id !== sid ? s : failed ? { ...s, status: 'failed', t1: Date.now() } : { ...s, taskId, at: Date.now() })))
     if (codex && !bg) await upsert($, id, { status: failed ? 'failed' : 'completed', t1: Date.now() })
     else if (codex && taskId) await upsert($, id, { taskId })
     return r

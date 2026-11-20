@@ -220,27 +220,43 @@ def remote(recs):
 def launched(recs):
     # The chats another chat's shell started (a launcher script, a claude -p in a Bash call): such a chat's process
     # descends from the other's, through the shell and whatever ran in it. Desktop's own chats (hostSessionId) never
-    # do, so with none of the rest alive the process table is not asked. Returns the live ones' chat → the chat above
-    # it, and those whose record says they are at work: a headless run's journal goes quiet through a long tool call.
+    # do, so with none of the rest alive the process table is not asked. Returns the live ones' chat → [the chat above
+    # it, when the process right under that chat began: the shell of the Bash call, which is how the mod tells which
+    # command started it], those whose record says they are at work (a headless run's journal goes quiet through a
+    # long tool call).
     kids = [d for d in recs if d.get('sessionId') and not d.get('hostSessionId') and alive(d.get('pid'))]
     if not kids or sys.platform == 'win32':
         return {}, set()
     try:
-        import subprocess
-        table = subprocess.run(['ps', '-A', '-o', 'pid=,ppid='], capture_output=True, text=True, timeout=5).stdout
+        import subprocess, calendar
+        table = subprocess.run(['ps', '-A', '-o', 'pid=,ppid=,lstart='], capture_output=True, text=True, timeout=5,
+                               env=dict(os.environ, TZ='UTC', LC_ALL='C')).stdout
     except (OSError, ValueError, subprocess.SubprocessError):
         return {}, set()
-    up = {int(f[0]): int(f[1]) for f in (l.split() for l in table.splitlines()) if len(f) == 2 and f[0].isdigit() and f[1].isdigit()}
-    chat = {d['pid']: d['sessionId'] for d in recs if d.get('sessionId') and isinstance(d.get('pid'), int)}
+    up, began = {}, {}
+    for f in (l.split() for l in table.splitlines()):
+        if len(f) >= 2 and f[0].isdigit() and f[1].isdigit():
+            up[int(f[0])], began[int(f[0])] = int(f[1]), ' '.join(f[2:])
+    def same(d):
+        # A record outlives a chat that was killed, and its process id goes to another process in time: the record
+        # names when its own began, in the words ps has for it. One that names none, or in other words, is believed.
+        was = ' '.join(str(d.get('procStart') or '').split())
+        return not re.match(r'[A-Z][a-z]{2} [A-Z][a-z]{2} +\d+ [\d:]{8} \d{4}$', was) or was == began.get(d.get('pid'))
+    kids = [d for d in kids if same(d)]
+    chat = {d['pid']: d['sessionId'] for d in recs if d.get('sessionId') and isinstance(d.get('pid'), int) and same(d)}
     links = {}
     for d in kids:
-        p = up.get(d['pid'])
+        p, under = up.get(d['pid']), d['pid']
         for _ in range(16):
             if not p or p == 1 or p in chat:
                 break
-            p = up.get(p)
+            p, under = up.get(p), p
         if p in chat and p != d['pid']:
-            links[d['sessionId']] = chat[p]
+            try:
+                at = calendar.timegm(time.strptime(began.get(under, ''), '%a %b %d %H:%M:%S %Y'))
+            except ValueError:
+                at = None
+            links[d['sessionId']] = [chat[p], at]
     return links, {d['sessionId'] for d in kids if d['sessionId'] in links and d.get('status') == 'busy'}
 
 # Background tasks this journal was told have ended, by the tool call that started them, and the background shell
@@ -349,11 +365,17 @@ if mode == 'all':
     procs = [side(p) or {} for p in files(H + '/.claude/sessions/*.json')]
     held = remote(procs)
     links, busy = launched(procs)
+    # Every chat whose process lives, Desktop's too: a started chat with none has ended, whatever its journal's age.
+    living = {d['sessionId'] for d in procs if d.get('sessionId') and alive(d.get('pid'))}
     # Who started whom, kept a day past the child's end: its process is gone then, and a finished run stays under the
-    # chat that started it. The previous scan carries it in.
-    spawned = {k: v for k, v in (last.get('spawned') or {}).items() if isinstance(v, list) and len(v) == 2 and now - v[1] < 86400}
-    spawned.update((k, [v, now]) for k, v in links.items())
+    # chat that started it. The previous scan carries it in: chat → [the chat above it, when last seen alive, when the
+    # shell that started it began].
+    spawned = {k: v for k, v in (last.get('spawned') or {}).items() if isinstance(v, list) and len(v) >= 2 and now - v[1] < 86400}
+    spawned.update((k, [v[0], now, v[1]]) for k, v in links.items())
     out['spawned'] = spawned
+    # The folder of the process records: its time moves when a chat starts or ends, and only then, so the mod asks for
+    # the next scan as soon as a launcher's chat appears rather than within a minute.
+    out['watch'] = out['watch'] + [H + '/.claude/sessions']
     # Every session's Desktop title, so a quiet one that is not listed below still reads its own here.
     out['titles'] = {d['sessionId']: desk[d['sessionId']]['title'] for d in procs if (desk.get(d.get('sessionId')) or {}).get('title')}
     cl = recent(files(H + '/.claude/projects/*/*.jsonl') + files(H + '/.claude/projects/*/*/subagents/agent-*.jsonl'))
@@ -370,8 +392,9 @@ if mode == 'all':
         r['live'] = sid in held
         if r['live']:
             r['entry'] = 'remote-control'
-        # Set on every row, cached ones too: the chat whose shell started it, and whether its process is at work.
-        r['by'], r['busy'] = (spawned.get(sid) or [None])[0], sid in busy
+        # Set on every row, cached ones too: the chat whose shell started it, whether its process is at work, whether it
+    # lives at all, and when the shell that started it began.
+        r['by'], r['busy'], r['up'], r['shellAt'] = (spawned.get(sid) or [None])[0], sid in busy, sid in living, ((spawned.get(sid) or []) + [None] * 3)[2]
         out['claude'].append(r)
 elif me:
     desk = desktop()
@@ -384,7 +407,7 @@ elif me:
     for sid, v in (last.get('spawned') or {}).items():
         for p, st in stats(files(H + '/.claude/projects/*/' + sid + '.jsonl') if isinstance(v, list) and v[:1] == [me] else []).items():
             r = withDesk(parse(p, st, claude), desk)
-            r['by'], r['busy'] = me, False
+            r['by'], r['busy'], r['up'], r['shellAt'] = me, False, False, (v + [None] * 3)[2]
             out['claude'].append(r)
 # A codex_exec rollout starts within two minutes of the Bash call that launched it.
 launches = [l for r in out['claude'] for l in r.get('launches') or []]

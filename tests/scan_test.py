@@ -112,7 +112,8 @@ with tempfile.TemporaryDirectory() as home:
     json.dump({'sessionId': 'S2', 'pid': os.getpid()}, open(home + '/.claude/sessions/4.json', 'w'))
     both = scan(home, 'all', '15')
     assert both['titles'] == {'S2': 'Quiet chat'}, both['titles']
-    assert both['watch'] == [A[:-1]], both['watch']
+    # The folders the mod looks at between scans: Desktop's records, and the process records, which a new chat moves.
+    assert both['watch'] == [A[:-1], home + '/.claude/sessions'], both['watch']
     assert 'S2.jsonl' not in {r['path'].split('/')[-1] for r in both['claude']}
 
     # A session's own scan: its Desktop title and the sessions it started, an archived one left out.
@@ -164,6 +165,16 @@ with tempfile.TemporaryDirectory() as home:
             assert (rows['L1.jsonl']['by'], rows['L1.jsonl']['busy']) == ('L0', True), rows.get('L1.jsonl')
             assert rows['L0.jsonl']['by'] is None and not rows['L0.jsonl']['busy'], sorted(rows)
             assert list(run['spawned']) == ['L1'] and run['spawned']['L1'][0] == 'L0', run['spawned']
+            # Its process lives, and the link tells when the process right under the starter began: the Bash call's shell.
+            assert rows['L1.jsonl']['up'] and rows['L0.jsonl']['up'] and abs(rows['L1.jsonl']['shellAt'] - now) < 30, rows['L1.jsonl']
+            assert run['spawned']['L1'][2] == rows['L1.jsonl']['shellAt']
+            # A record left by a killed chat whose process id went to another process: it began at another time, so
+            # it is no chat's; one that names its true start is.
+            began = subprocess.run(['ps', '-p', str(kid), '-o', 'lstart='], capture_output=True, text=True, env=dict(os.environ, TZ='UTC', LC_ALL='C')).stdout.strip()
+            json.dump({'sessionId': 'L1', 'pid': kid, 'status': 'busy', 'procStart': 'Mon Jan  1 00:00:00 2001'}, open(home + '/.claude/sessions/6.json', 'w'))
+            assert scan(home, 'all', '15')['spawned'] == {}
+            json.dump({'sessionId': 'L1', 'pid': kid, 'status': 'busy', 'procStart': began}, open(home + '/.claude/sessions/6.json', 'w'))
+            assert list(scan(home, 'all', '15')['spawned']) == ['L1'], began
         finally:
             tree.kill()
             tree.wait()
@@ -172,9 +183,10 @@ with tempfile.TemporaryDirectory() as home:
             os.remove(home + '/.claude/sessions/' + f + '.json')
         write(P + 'L1.jsonl', [user, reply], FRESH)
         after = {r['path'].split('/')[-1]: r for r in scan(home, 'all', '15', stdin=json.dumps({'spawned': run['spawned']}))['claude']}
-        assert (after['L1.jsonl']['by'], after['L1.jsonl']['busy']) == ('L0', False) and 'L0.jsonl' in after, after.get('L1.jsonl')
+        assert (after['L1.jsonl']['by'], after['L1.jsonl']['busy'], after['L1.jsonl']['up']) == ('L0', False, False) and 'L0.jsonl' in after, after.get('L1.jsonl')
+        assert after['L1.jsonl']['shellAt'] == run['spawned']['L1'][2]
         stale = {'L1': ['L0', now - 2 * 86400]}
         assert next(r for r in scan(home, 'all', '15', stdin=json.dumps({'spawned': stale}))['claude'] if r['path'].endswith('/L1.jsonl'))['by'] is None
         own = scan(home, 'codex:L0', '5', stdin=json.dumps({'spawned': run['spawned']}))['claude']
-        assert [(r['path'].split('/')[-1], r['by']) for r in own] == [('L1.jsonl', 'L0')], own
+        assert [(r['path'].split('/')[-1], r['by'], r['up'], r['shellAt']) for r in own] == [('L1.jsonl', 'L0', False, run['spawned']['L1'][2])], own
     print('scan.py: ok')

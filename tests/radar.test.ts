@@ -255,7 +255,8 @@ test("this session's share of the machine-wide scan is what its own scan read", 
   ])
   const v = ownScan(all, 'S1', own, ['/c/open.jsonl'], now)
   const by = (p: string) => v.codex.find(r => r.path === p)
-  expect(v.claude.map(r => r.path)).toEqual(['/p/kid.jsonl'])
+  // The session it started and that session's subagent; its own subagents come through the hooks.
+  expect(v.claude.map(r => r.path)).toEqual(['/p/kid.jsonl', '/p/kid/subagents/agent-a.jsonl'])
   expect(v.title).toBe('Mine')
   expect([v.dirs, v.watch]).toEqual([['/c/day'], ['/d']])
   expect(by('/c/past-window.jsonl')).toBeUndefined()
@@ -274,30 +275,49 @@ test("a chat another chat's shell started sits under it with a terminal's mark, 
   // Its journal names Desktop as its entry (a launcher run from Desktop passes it on), and it has been quiet five
   // minutes through a long tool call, while its process says it is at work.
   const lead = { path: '/p/lead.jsonl', mtime: now - 600e3, tokIn: 1, tokOut: 1, cwd: '/x/Proj', title: 'Lead', t0: at(3600e3) }
-  const run = { path: '/q/run.jsonl', mtime: now - 300e3, tokIn: 1, tokOut: 1, cwd: '/x/Tool', t0: at(900e3), entry: 'claude-desktop', by: 'lead', busy: true }
+  const run = { path: '/q/run.jsonl', mtime: now - 300e3, tokIn: 1, tokOut: 1, cwd: '/x/Tool', t0: at(900e3), entry: 'claude-desktop', by: 'lead', busy: true, up: true, shellAt: (now - 900e3) / 1000 }
   const rows = fromScan({ codex: [], claude: [lead, run] }, now)
   expect(ordered(rows).map(r => r.guide + r.a.title)).toEqual(['Lead', '└─ Tool'])
   const row = rows.find(a => a.id === '/q/run.jsonl')!
-  expect([row.via, row.how, row.status, row.t1]).toEqual(['shell', 'shell', 'running', undefined])
-  expect(fromScan({ codex: [], claude: [lead, { ...run, busy: false }] }, now).find(a => a.id === '/q/run.jsonl')!.status).toBe('idle')
-  // This session's share holds the chats its shell started, not another's.
-  const v = ownScan({ codex: [], claude: [run, { ...run, path: '/q/theirs.jsonl', by: 'other' }] }, 'lead', new Map(), [], now)
-  expect(v.claude.map(r => r.path)).toEqual(['/q/run.jsonl'])
-  // There it takes the background command that went out last within two minutes before it: not one after it, not a
-  // watch, not one long before.
+  expect([row.via, row.viaAt, row.how, row.status, row.t1]).toEqual(['shell', now - 900e3, 'shell', 'running', undefined])
+  const status = (r: object) => fromScan({ codex: [], claude: [lead, { ...run, ...r }] }, now).find(a => a.id === '/q/run.jsonl')!.status
+  expect(status({ busy: false })).toBe('idle')
+  // Its process gone, it is over at once, however fresh its journal; a scan that tells of no process waits as before.
+  expect(status({ busy: false, up: false, mtime: now - 1e3 })).toBe('completed')
+  expect(status({ busy: false, up: undefined, mtime: now - 1e3 })).toBe('running')
+  // This session's share holds the chats its shell started, the chats those started and the subagents of them all,
+  // not another's.
+  const deep = { ...run, path: '/q/deep.jsonl', by: 'run' }, helper = { ...run, path: '/q/run/subagents/agent-h.jsonl', by: null }
+  const v = ownScan({ codex: [], claude: [run, deep, helper, { ...run, path: '/q/theirs.jsonl', by: 'other' }, { ...helper, path: '/q/theirs/subagents/agent-h.jsonl' }] }, 'lead', new Map(), [], now)
+  expect(v.claude.map(r => r.path)).toEqual(['/q/run.jsonl', '/q/deep.jsonl', '/q/run/subagents/agent-h.jsonl'])
+  // There it takes the background command whose shell it descends from: the one that had begun when that shell did.
+  // Not one that ended long before, not a watch, not a server started half a minute earlier and still running.
   const sh: Shell[] = [
-    { id: 'tu1', cmd: 'make', t0: now - 1100e3, status: 'completed' },
-    { id: 'tu2', cmd: 'python launcher.py start', title: 'Executor round', t0: now - 902e3, status: 'running', taskId: 'b2' },
-    { id: 'tu3', cmd: 'until [ -f x ]; do sleep 1; done', t0: now - 901e3, status: 'running', kind: 'monitor' },
-    { id: 'tu4', cmd: 'npm test', t0: now - 880e3, status: 'running' },
+    { id: 'tu1', cmd: 'make', t0: now - 1100e3, at: now - 1100e3, t1: now - 1000e3, status: 'completed' },
+    // Asked for a minute before it began: the call waited for permission.
+    { id: 'tu2', cmd: 'python launcher.py start', title: 'Executor round', t0: now - 960e3, at: now - 899e3, status: 'running', taskId: 'b2' },
+    { id: 'tu3', cmd: 'until [ -f x ]; do sleep 1; done', t0: now - 899e3, at: now - 899e3, status: 'running', kind: 'monitor' },
+    { id: 'tu4', cmd: 'npm run dev', title: 'Dev server', t0: now - 930e3, at: now - 929e3, status: 'running', taskId: 'b4' },
   ]
-  const lone: Agent = { ...row, id: '/q/plain.jsonl', via: undefined }
+  const lone: Agent = { ...row, id: '/q/plain.jsonl', via: undefined, viaAt: undefined }
   const [kids, started] = fromShells([{ ...row, parentId: 'main' }, lone], sh)
   expect([kids[0]!.title, kids[0]!.cmd, kids[0]!.how, kids[0]!.taskId]).toEqual(['Executor round', 'python launcher.py start', 'shell · bg', 'b2'])
   expect(kids[1]).toEqual(lone)
   expect([...started]).toEqual(['tu2'])
-  // Its command ended, there is no task left to stop.
-  expect(fromShells([row], sh.map(s => ({ ...s, status: 'completed' })))[0][0]!.taskId).toBeUndefined()
+  // A chat a foreground call started has no command of its own among them: the server keeps its name, its task and
+  // its mark, and Stop on the chat's row is not there to end it.
+  const [alone, none] = fromShells([row], [sh[3]!])
+  expect([alone[0], none.size]).toEqual([row, 0])
+  // A second run of the same launcher, long after it began, is still its own: the shell is the same one.
+  expect(fromShells([{ ...row, t0: now - 100e3 }], sh)[0][0]!.taskId).toBe('b2')
+  // A command read back from the journal has only the time it was asked for: within two minutes, and still running.
+  const past: Shell = { id: 'tu5', cmd: 'python launcher.py start', t0: now - 960e3, status: 'running', taskId: 'b5' }
+  expect(fromShells([row], [past])[0][0]!.taskId).toBe('b5')
+  expect(fromShells([row], [{ ...past, status: 'completed', t1: now - 950e3 }])[0][0]).toEqual(row)
+  expect(fromShells([row], [{ ...past, t0: now - 1100e3 }])[0][0]).toEqual(row)
+  // Its command ended: the run is over with it, and there is no task left to stop.
+  const over = fromShells([row], sh.map(s => ({ ...s, status: 'killed', t1: now - 10e3 })))[0][0]!
+  expect([over.status, over.t1, over.taskId]).toEqual(['killed', now - 10e3, undefined])
 })
 
 test('past the budget the oldest ended commands go first; running ones stay', () => {
